@@ -2,12 +2,18 @@ extends RefCounted
 ## 카드 정의.
 ## 이동의 dir 과 공격의 range 는 모두 "상대좌표"(x = 앞쪽으로 몇 칸, y = 행 차이)다.
 ## 실제 칸은 캐릭터의 facing 을 곱해 계산하므로, 캐릭터가 왼쪽/오른쪽 어디에 서 있든 정의는 하나만 둔다.
+## anim 은 화면 연출 종류(battle.gd 의 _attack_anim)다. 규칙은 읽지 않는다 — 새 스킬은 기존 연출을 골라 재사용하면 된다.
 
 const COMMON := {
 	"up": {"name": "위로", "type": "move", "dir": Vector2i(0, -1), "cost": 0},
 	"down": {"name": "아래로", "type": "move", "dir": Vector2i(0, 1), "cost": 0},
 	"fwd": {"name": "앞으로", "type": "move", "dir": Vector2i(1, 0), "cost": 0},
 	"back": {"name": "뒤로", "type": "move", "dir": Vector2i(-1, 0), "cost": 0},
+	# 2칸 이동(질주). 중간 칸의 적은 뛰어넘고, 벽에 막히면 갈 수 있는 만큼만 간다(game_rules.move_target)
+	"dash_up": {"name": "위 2칸", "type": "move", "dir": Vector2i(0, -2), "cost": 5},
+	"dash_down": {"name": "아래 2칸", "type": "move", "dir": Vector2i(0, 2), "cost": 5},
+	"dash_fwd": {"name": "앞 2칸", "type": "move", "dir": Vector2i(2, 0), "cost": 5},
+	"dash_back": {"name": "뒤 2칸", "type": "move", "dir": Vector2i(-2, 0), "cost": 5},
 	"guard": {"name": "방어", "type": "guard", "cost": 0},
 	"rest": {"name": "기 모으기", "type": "rest", "cost": 0},
 }
@@ -17,12 +23,12 @@ const CHARACTERS := {
 		"name": "검사",
 		"body": Color(0.85, 0.22, 0.2),
 		"attacks": {
-			"sword_slash": {"name": "베기", "type": "attack", "cost": 15, "dmg": 25,
+			"sword_slash": {"name": "베기", "anim": "lunge", "type": "attack", "cost": 15, "dmg": 25,
 				"range": [Vector2i(1, 0)]},
-			"sword_spin": {"name": "회전베기", "type": "attack", "cost": 25, "dmg": 15,
+			"sword_spin": {"name": "회전베기", "anim": "spin", "type": "attack", "cost": 25, "dmg": 15,
 				"range": [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1), Vector2i(-1, 0),
 					Vector2i(1, 0), Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1)]},
-			"sword_thrust": {"name": "찌르기", "type": "attack", "cost": 30, "dmg": 30,
+			"sword_thrust": {"name": "찌르기", "anim": "thrust", "type": "attack", "cost": 30, "dmg": 30,
 				"range": [Vector2i(1, 0), Vector2i(2, 0)]},
 		},
 	},
@@ -30,13 +36,113 @@ const CHARACTERS := {
 		"name": "궁수",
 		"body": Color(0.2, 0.55, 0.9),
 		"attacks": {
-			"archer_arrow": {"name": "화살", "type": "attack", "cost": 15, "dmg": 20,
+			"archer_arrow": {"name": "화살", "anim": "arrow", "type": "attack", "cost": 15, "dmg": 20,
 				"range": [Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0)]},
-			"archer_volley": {"name": "화살비", "type": "attack", "cost": 25, "dmg": 20,
+			"archer_volley": {"name": "화살비", "anim": "volley", "type": "attack", "cost": 25, "dmg": 20,
 				"range": [Vector2i(2, -1), Vector2i(2, 0), Vector2i(2, 1)]},
-			"archer_kick": {"name": "발차기", "type": "attack", "cost": 5, "dmg": 10,
+			"archer_kick": {"name": "발차기", "anim": "lunge", "type": "attack", "cost": 5, "dmg": 10,
 				"range": [Vector2i(1, 0)]},
 		},
+	},
+	# ---- 싱글 플레이 몬스터. hp 를 생략하면 MAX_HP, scale 은 화면에서의 키 배율
+	"slime": {
+		"name": "슬라임",
+		"hp": 60,
+		"attacks": {
+			"slime_tackle": {"name": "몸통박치기", "anim": "lunge", "type": "attack", "cost": 10, "dmg": 15,
+				"range": [Vector2i(1, 0)]},
+			"slime_splash": {"name": "산성 튀기기", "anim": "spin", "type": "attack", "cost": 20, "dmg": 10,
+				"range": [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1), Vector2i(-1, 0),
+					Vector2i(1, 0), Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1)]},
+		},
+	},
+	"mushroom": {
+		"name": "독버섯",
+		"hp": 30,
+		"attacks": {
+			"mush_bonk": {"name": "박치기", "anim": "lunge", "type": "attack", "cost": 5, "dmg": 8,
+				"range": [Vector2i(1, 0)]},
+			"mush_spore": {"name": "독포자", "anim": "spin", "type": "attack", "cost": 15, "dmg": 6,
+				"range": [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1), Vector2i(-1, 0),
+					Vector2i(1, 0), Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1)]},
+			"mush_puff": {"name": "포자 뿜기", "anim": "wave", "type": "attack", "cost": 10, "dmg": 7,
+				"range": [Vector2i(1, 0), Vector2i(2, 0)]},
+		},
+	},
+	"king_slime": {
+		"name": "킹슬라임",
+		"hp": 80,
+		"scale": 1.6,
+		"attacks": {
+			"king_tackle": {"name": "몸통박치기", "anim": "lunge", "type": "attack", "cost": 10, "dmg": 15,
+				"range": [Vector2i(1, 0)]},
+			"king_splash": {"name": "점액 튀기기", "anim": "spin", "type": "attack", "cost": 20, "dmg": 10,
+				"range": [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1), Vector2i(-1, 0),
+					Vector2i(1, 0), Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1)]},
+			# 패턴 전용 대기술. 자기 위아래와 앞 2열을 덮지만 등 뒤는 비어 있다 — 뒤로 돌아가는 게 정답
+			"king_crush": {"name": "대점프 압살", "anim": "jump", "type": "attack", "cost": 0, "dmg": 25,
+				"pattern_only": true,
+				"range": [Vector2i(0, -1), Vector2i(0, 1), Vector2i(1, -1), Vector2i(1, 0), Vector2i(1, 1),
+					Vector2i(2, -1), Vector2i(2, 0), Vector2i(2, 1)]},
+		},
+		"phases": [
+			{"until_hp": 0.5, "pattern": [
+				{"cards": "ai"},
+				{"cards": "ai"},
+				{"cards": ["rest", "guard", "rest"], "warn": "킹슬라임이 몸을 크게 부풀린다… 다음 턴 [대점프 압살]!"},
+				{"cards": ["king_crush", "ai", "ai"]},
+			]},
+			{"enter": "킹슬라임이 끓어오른다! 압살이 잦아진다.", "pattern": [
+				{"cards": ["guard", "rest", "ai"], "warn": "킹슬라임이 다시 부풀어 오른다… 다음 턴 [대점프 압살]!"},
+				{"cards": ["king_crush", "ai", "ai"]},
+				{"cards": "ai"},
+			]},
+		],
+	},
+	"bat": {
+		"name": "박쥐",
+		"hp": 50,
+		"attacks": {
+			"bat_bite": {"name": "물기", "anim": "lunge", "type": "attack", "cost": 5, "dmg": 12,
+				"range": [Vector2i(1, 0)]},
+			"bat_sonic": {"name": "초음파", "anim": "wave", "type": "attack", "cost": 15, "dmg": 10,
+				"range": [Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0)]},
+			"bat_dive": {"name": "급강하", "anim": "thrust", "type": "attack", "cost": 20, "dmg": 18,
+				"range": [Vector2i(1, -1), Vector2i(1, 0), Vector2i(1, 1)]},
+		},
+	},
+	"skeleton": {
+		"name": "해골 무사",
+		"hp": 140,
+		"scale": 1.25,
+		"attacks": {
+			"skel_slash": {"name": "베기", "anim": "lunge", "type": "attack", "cost": 15, "dmg": 25,
+				"range": [Vector2i(1, 0)]},
+			"skel_whirl": {"name": "대회전", "anim": "spin", "type": "attack", "cost": 30, "dmg": 20,
+				"range": [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1), Vector2i(-1, 0),
+					Vector2i(1, 0), Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1)]},
+			"skel_charge": {"name": "돌진찌르기", "anim": "thrust", "type": "attack", "cost": 35, "dmg": 30,
+				"range": [Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0)]},
+			# 패턴 전용 대기술 — AI 가 아무 때나 고르지 못하고 boss_plan 이 정한 턴에만 나온다
+			"skel_storm": {"name": "망령 참격", "anim": "thrust", "type": "attack", "cost": 0, "dmg": 35,
+				"pattern_only": true,
+				"range": [Vector2i(1, -1), Vector2i(1, 0), Vector2i(1, 1), Vector2i(2, -1), Vector2i(2, 0), Vector2i(2, 1)]},
+		},
+		# 보스 패턴(boss_plan.gd). HP 비율이 until_hp 보다 높은 동안 그 페이즈.
+		# cards 의 "ai" 칸은 AI 가 채운다. 예고 턴에 방어·기 모으기만 하는 건 일부러 만든 반격 기회
+		"phases": [
+			{"until_hp": 0.5, "pattern": [
+				{"cards": "ai"},
+				{"cards": "ai"},
+				{"cards": ["guard", "rest", "rest"], "warn": "해골 무사가 칼에 망령을 모은다… 다음 턴 대기술 [망령 참격]!"},
+				{"cards": ["skel_storm", "ai", "ai"]},
+			]},
+			{"enter": "해골 무사가 분노했다! 대기술이 잦아진다.", "pattern": [
+				{"cards": ["rest", "guard", "ai"], "warn": "분노한 해골 무사가 망령을 모은다… 다음 턴 [망령 참격]!"},
+				{"cards": ["skel_storm", "ai", "ai"]},
+				{"cards": "ai"},
+			]},
+		],
 	},
 }
 

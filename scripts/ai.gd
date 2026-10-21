@@ -10,7 +10,9 @@ const DANGER_WEIGHT := 0.4
 const MP_WEIGHT := 0.15
 
 
-static func choose(rules, idx: int, rng: RandomNumberGenerator) -> Array:
+## fixed: 칸별로 꼭 낼 카드(null 이면 AI 가 고름). 보스 패턴이 일부 칸만 정하고 나머지를 맡길 때 쓴다.
+## pattern_only 카드는 fixed 로 지정됐을 때만 나온다.
+static func choose(rules, idx: int, rng: RandomNumberGenerator, fixed: Array = []) -> Array:
 	var hand: Array = rules.hand(idx)
 	var best: Array = []
 	var best_score := -INF
@@ -18,7 +20,7 @@ static func choose(rules, idx: int, rng: RandomNumberGenerator) -> Array:
 		for b: String in hand:
 			for c: String in hand:
 				var pick := [a, b, c]
-				if not rules.is_valid_selection(idx, pick):
+				if not _fits(pick, fixed) or not rules.is_valid_selection(idx, pick):
 					continue
 				var score := _score(rules, idx, pick) + rng.randf() * NOISE
 				if score > best_score:
@@ -27,24 +29,41 @@ static func choose(rules, idx: int, rng: RandomNumberGenerator) -> Array:
 	return best
 
 
-static func _score(rules, idx: int, pick: Array) -> float:
-	var foe := 1 - idx
-	var sim = rules.clone()
-	var idle := ["rest", "rest", "rest"]
-	var before: int = sim.fighters[foe].hp
-	if idx == 0:
-		sim.resolve_turn(pick, idle)
-	else:
-		sim.resolve_turn(idle, pick)
-	var dealt: int = before - sim.fighters[foe].hp
+static func _fits(pick: Array, fixed: Array) -> bool:
+	for k in pick.size():
+		var want = fixed[k] if k < fixed.size() else null
+		if want != null:
+			if pick[k] != want:
+				return false
+		elif Cards.get_card(pick[k]).get("pattern_only", false):
+			return false
+	return true
 
-	# 턴이 끝난 자리에서 상대가 지금 MP 로 쓸 수 있는 공격에 몇 개나 걸리는지 = 위험도
+
+## 상대들은 제자리에서 기 모으기만 한다고 가정하고 내 3장을 굴려 본다.
+static func _score(rules, idx: int, pick: Array) -> float:
+	var sim = rules.clone()
+	var foes: Array[int] = rules.foes_of(idx)
+	var plans := []
+	for k in sim.fighters.size():
+		plans.append(pick if k == idx else ["rest", "rest", "rest"])
+	var before := 0
+	for j in foes:
+		before += sim.fighters[j].hp
+	sim.resolve_turn(plans)
+	var dealt := before
+	for j in foes:
+		dealt -= sim.fighters[j].hp
+
+	# 턴이 끝난 자리에서 상대들이 지금 MP 로 쓸 수 있는 공격에 몇 개나 걸리는지 = 위험도
 	var me = sim.fighters[idx]
-	var them = sim.fighters[foe]
-	var foe_mp: int = rules.fighters[foe].mp
 	var danger := 0
-	for id: String in rules.hand(foe):
-		var card: Dictionary = Cards.get_card(id)
-		if card.type == "attack" and int(card.cost) <= foe_mp and sim.attack_tiles(them, card).has(me.pos):
-			danger += int(card.dmg)
+	for j in foes:
+		var them = sim.fighters[j]
+		var foe_mp: int = rules.fighters[j].mp
+		for id: String in rules.hand(j):
+			var card: Dictionary = Cards.get_card(id)
+			if card.type == "attack" and not card.get("pattern_only", false) and int(card.cost) <= foe_mp \
+					and sim.attack_tiles(them, card).has(me.pos):
+				danger += int(card.dmg)
 	return dealt - danger * DANGER_WEIGHT + me.mp * MP_WEIGHT
