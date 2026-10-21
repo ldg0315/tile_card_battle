@@ -359,9 +359,8 @@ func _test_synth_sounds() -> void:
 ## 장면 슬롯마다 곡이 걸려 있는지(사용자가 정한 배치).
 func _test_bgm_slots() -> void:
 	check(BgmSynth.resolve("forest") == "folk", "숲 = 민요풍")
-	check(BgmSynth.resolve("map") == "calm", "맵 = 잔잔함")
-	check(BgmSynth.resolve("title") == "calm_quiet", "타이틀 = 잔잔함(새소리 없음)")
-	check(not "birds" in BgmSynth.song_of("calm_quiet").ambient and "wind" in BgmSynth.song_of("calm_quiet").ambient, "타이틀 곡엔 새소리 없이 바람만")
+	check(BgmSynth.resolve("title") == "calm" and BgmSynth.resolve("map") == "calm", "타이틀·맵 = 잔잔함(같은 곡이라 이어짐)")
+	check(not "birds" in BgmSynth.song_of("calm").ambient and "wind" in BgmSynth.song_of("calm").ambient, "메뉴 곡엔 새소리 없이 바람만")
 	check(BgmSynth.resolve("boss") == "adventure", "보스전 = 모험")
 	check(BgmSynth.resolve("cave") == "", "곡이 없는 슬롯은 무음")
 	for slot: String in BgmSynth.SLOTS:

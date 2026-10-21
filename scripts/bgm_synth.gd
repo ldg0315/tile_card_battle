@@ -12,7 +12,7 @@ const NOTE_INDEX := {"C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5, "F#": 6, 
 # 같은 곡을 여러 슬롯에 걸면(타이틀·맵) 화면을 넘어가도 끊기지 않고 이어진다. 동굴·해안은 아직 곡이 없다
 const SLOTS := {
 	"forest": "folk",
-	"title": "calm_quiet",
+	"title": "calm",
 	"map": "calm",
 	"boss": "adventure",
 }
@@ -70,7 +70,7 @@ const SONGS := {
 		"bass": "folk", "bass_vol": 0.2, "drums": "folk", "drum_vol": 1.0,
 		"ambient": ["birds"],
 	},
-	# 잔잔함: 느린 4/4, 드럼 없이 화음 패드와 종소리 멜로디, 새소리와 바람
+	# 잔잔함: 느린 4/4, 드럼 없이 화음 패드와 부드러운 멜로디, 바람. 메뉴(타이틀·맵)용이라 새소리는 넣지 않는다
 	"calm": {
 		"bpm": 84,
 		"chords": ["C", "Am", "F", "G", "C", "Em", "F", "G"],
@@ -88,10 +88,8 @@ const SONGS := {
 		# 한 옥타브 낮춘 부드러운 삼각파로
 		"lead_wave": "tri", "lead_vol": 0.2, "lead_sustain": 0.35, "lead_transpose": -12,
 		"pad_vol": 0.045, "bass": "long", "bass_vol": 0.14, "drums": "none",
-		"ambient": ["birds", "wind"],
+		"ambient": ["wind"],
 	},
-	# 잔잔함에서 새소리만 뺀 판(타이틀용). base 의 값을 그대로 쓰고 적은 값만 덮어쓴다
-	"calm_quiet": {"base": "calm", "ambient": ["wind"]},
 	# 모험: A 단조, 빠르고 힘찬 드럼과 달리는 베이스
 	"adventure": {
 		"bpm": 150,
