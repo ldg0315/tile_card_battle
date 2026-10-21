@@ -37,6 +37,7 @@ func _init() -> void:
 	_test_multi_enemy()
 	_test_mp_regen()
 	_test_dash()
+	_test_dash_only_players_and_bosses()
 	_test_synth_sounds()
 	_test_bgm()
 	_test_bgm_slots()
@@ -384,3 +385,13 @@ func _test_bgm() -> void:
 		for i in range(0, frames, 7):
 			peak = maxi(peak, absi(s.data.decode_s16(i * 2)))
 		check(peak > 3000 and peak < 32767, "%s: 소리가 있고 찢어지지 않음 (peak %d)" % [name, peak])
+
+
+## 2칸 이동은 플레이어와 보스만.
+func _test_dash_only_players_and_bosses() -> void:
+	for id in ["sword", "archer", "king_slime", "skeleton"]:
+		check(Cards.hand_for(id).has("dash_right"), "%s 는 2칸 이동 가능" % id)
+	for id in ["slime", "mushroom", "bat"]:
+		check(not Cards.hand_for(id).has("dash_right") and Cards.hand_for(id).has("right"), "%s 는 1칸 이동만" % id)
+	var r = Rules.new("sword", "slime")
+	check(not r.is_valid_selection(1, ["dash_left", "rest", "guard"]), "일반 몬스터는 2칸 이동 카드를 낼 수 없음")

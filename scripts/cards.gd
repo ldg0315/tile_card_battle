@@ -50,6 +50,7 @@ const CHARACTERS := {
 	# ---- 싱글 플레이 몬스터. hp 를 생략하면 MAX_HP, scale 은 화면에서의 키 배율
 	"slime": {
 		"name": "슬라임",
+		"dash": false,  # 2칸 이동은 플레이어와 보스만 — 일반 몬스터까지 뛰어다니면 판이 산만하다
 		"hp": 60,
 		"attacks": {
 			"slime_tackle": {"name": "몸통박치기", "anim": "lunge", "type": "attack", "cost": 10, "dmg": 15,
@@ -61,6 +62,7 @@ const CHARACTERS := {
 	},
 	"mushroom": {
 		"name": "독버섯",
+		"dash": false,  # 2칸 이동은 플레이어와 보스만 — 일반 몬스터까지 뛰어다니면 판이 산만하다
 		"hp": 30,
 		"attacks": {
 			"mush_bonk": {"name": "박치기", "anim": "lunge", "type": "attack", "cost": 5, "dmg": 8,
@@ -104,6 +106,7 @@ const CHARACTERS := {
 	},
 	"bat": {
 		"name": "박쥐",
+		"dash": false,  # 2칸 이동은 플레이어와 보스만 — 일반 몬스터까지 뛰어다니면 판이 산만하다
 		"hp": 50,
 		"attacks": {
 			"bat_bite": {"name": "물기", "anim": "lunge", "type": "attack", "cost": 5, "dmg": 12,
@@ -160,9 +163,13 @@ static func get_card(id: String) -> Dictionary:
 
 
 ## 공통 카드 + 캐릭터 고유 공격. 손패는 매 턴 전부 열려 있고 그중 3장을 고른다.
+## "dash": false 인 캐릭터(일반 몬스터)는 2칸 이동 카드를 받지 않는다.
 static func hand_for(char_id: String) -> Array[String]:
 	var hand: Array[String] = []
-	hand.assign(COMMON.keys())
+	var can_dash: bool = CHARACTERS[char_id].get("dash", true)
+	for id: String in COMMON:
+		if can_dash or not id.begins_with("dash_"):
+			hand.append(id)
 	for id: String in CHARACTERS[char_id].attacks.keys():
 		hand.append(id)
 	return hand

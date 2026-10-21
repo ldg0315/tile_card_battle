@@ -24,6 +24,7 @@ const MOVE_TIME := 0.3
 # 연출 전체 속도 배율(클수록 느림). 시간 값을 하나하나 고치지 않고 여기 한 곳에서 조절하려고 둔다
 const ANIM_SLOW := 1.3
 const TP_FOV := 40.0
+const CAM_X := 0.0  # 3인칭 카메라 가로 위치(보드 중심 = 0)
 const FP_FOV := 70.0
 # 상대와의 거리(칸, 대각선도 1칸) → 1인칭에서 엿볼 수 있는 상대 카드 수.
 # 가까울수록 자세가 잘 읽힌다는 설정 — 접근해야 하는 검사와 거리를 벌리려는 궁수 사이에 긴장을 만든다
@@ -174,13 +175,13 @@ func _build_world() -> void:
 	add_child(sun)
 
 	# 이누야샤 플래시 게임처럼 보드를 앞쪽 위에서 비스듬히 내려다보는 3인칭 카메라.
-	# 시선을 보드 중심보다 앞(z+)에 두는 건 하단 카드 UI 에 보드가 가리지 않게 위로 올리려는 것,
-	# 오른쪽(x+)으로 비키는 건 오른쪽 전투 기록 패널에 보드 끝 열이 가리지 않게 하려는 것.
+	# 시선을 보드 중심보다 앞(z+)에 두는 건 하단 카드 UI 에 보드가 가리지 않게 위로 올리려는 것.
+	# 전투 기록 패널은 기본으로 숨겨서(L) 보드를 화면 가운데에 둔다.
 	cam = Camera3D.new()
 	cam.fov = TP_FOV
 	add_child(cam)
-	cam.position = Vector3(1.6, 9.5, 10.5)
-	cam.look_at(Vector3(1.6, 0, 1.0))
+	cam.position = Vector3(CAM_X, 9.5, 10.5)
+	cam.look_at(Vector3(CAM_X, 0, 1.0))
 	cam.current = true
 	tp_xform = cam.global_transform
 	cam_smooth = tp_xform
@@ -326,7 +327,7 @@ func _prop_spot(prng: RandomNumberGenerator, has_sea: bool, tall: bool) -> Vecto
 		var p := Vector3(prng.randf_range(-16, 18), 0, prng.randf_range(-14, 2))
 		if absf(p.x) < 5.5 and p.z > -4.5:
 			continue
-		if tall and p.z > -3.5 and absf(p.x - 1.6) < 11.0:
+		if tall and p.z > -3.5 and absf(p.x - CAM_X) < 11.0:
 			continue
 		if has_sea and p.z < -7.5:
 			continue
@@ -467,6 +468,8 @@ func _build_ui() -> void:
 	log_panel.offset_right = -16
 	log_panel.offset_top = 100
 	log_panel.offset_bottom = -170
+	# 중요한 정보(보스 예고·피해·처치)는 화면에 크게 뜨니 기록은 필요할 때만(L) 본다
+	log_panel.hide()
 	root.add_child(log_panel)
 	log_label = RichTextLabel.new()
 	log_label.bbcode_enabled = true
@@ -474,6 +477,20 @@ func _build_ui() -> void:
 	log_label.add_theme_font_size_override("normal_font_size", 14)
 	log_label.add_theme_font_size_override("bold_font_size", 14)
 	log_panel.add_child(log_label)
+
+	# 전투 기록을 숨겨 둬서 조작 안내가 안 보이니, 카드 패널 바로 위에 한 줄로 늘 띄운다
+	var keys := Label.new()
+	keys.text = "V 1인칭   Tab 볼 적   Space 잠깐 3인칭   M 미니맵   L 전투 기록"
+	keys.add_theme_font_size_override("font_size", 13)
+	keys.add_theme_color_override("font_color", Color(1, 1, 1, 0.65))
+	keys.add_theme_constant_override("outline_size", 5)
+	keys.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
+	keys.anchor_top = 1
+	keys.anchor_bottom = 1
+	keys.offset_left = 16
+	keys.offset_top = -184
+	keys.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(keys)
 
 	var bottom := PanelContainer.new()
 	bottom.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
@@ -685,7 +702,7 @@ func _new_game() -> void:
 	_log("카드 3장을 순서대로 고르고 [b]실행[/b]을 누르세요.\n카드에 마우스를 올리면 범위가 노랗게 보입니다.")
 	_log("등 뒤를 치면 [b]뒤잡기[/b](피해 x%.1f), 방어는 정면만 막습니다. 이동 카드는 화면 기준(←→↑↓)이고, 이동하면 가장 가까운 적을 향해 돌아섭니다(발밑 화살표). 공격은 바라보는 쪽으로 나갑니다. MP 는 턴마다 %d 회복합니다." % [Rules.BACKSTAB_MULT, Rules.MP_REGEN])
 	_log("[b]V[/b]: 1인칭(적이 여럿이면 [b]Tab[/b]으로 볼 적 전환). 바라보는 적이 2칸 이내면 카드를 엿볼 수 있습니다.")
-	_log("1인칭에선 왼쪽 위 [b]미니맵[/b]에 고른 카드의 예상 경로가 나옵니다. [b]Space[/b]를 누르는 동안 3인칭, [b]M[/b]은 미니맵 켜기·끄기.")
+	_log("1인칭에선 왼쪽 위 [b]미니맵[/b]에 고른 카드의 예상 경로가 나옵니다. [b]Space[/b]를 누르는 동안 3인칭, [b]M[/b]은 미니맵 켜기·끄기, [b]L[/b]은 이 기록 창.")
 	result_panel.hide()
 	_show_current_stats()
 	boss_states.clear()
@@ -882,6 +899,9 @@ func _input(event: InputEvent) -> void:
 		return
 	if event.keycode == KEY_M:
 		minimap_always = not minimap_always
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_L:
+		log_panel.visible = not log_panel.visible
 		get_viewport().set_input_as_handled()
 	elif event.keycode == KEY_V:
 		_toggle_view()

@@ -84,7 +84,9 @@ const SONGS := {
 			["A5", 4], ["F5", 2], ["A5", 2],
 			["G5", 8],
 		],
-		"lead_wave": "sine", "lead_vol": 0.17, "lead_sustain": 0.25,
+		# 높은 사인파 멜로디는 휘파람·새 지저귐처럼 들려서(새소리를 뺀 타이틀에서도 "새소리"로 들림)
+		# 한 옥타브 낮춘 부드러운 삼각파로
+		"lead_wave": "tri", "lead_vol": 0.2, "lead_sustain": 0.35, "lead_transpose": -12,
 		"pad_vol": 0.045, "bass": "long", "bass_vol": 0.14, "drums": "none",
 		"ambient": ["birds", "wind"],
 	},
@@ -176,7 +178,7 @@ static func make(name: String) -> AudioStreamWAV:
 	for n: Array in song.melody:
 		var len_s: float = n[1] * eighth
 		if n[0] != "-":
-			_note(buf, t, len_s * 0.92, hz(midi(n[0])), lead_wave, song.lead_vol,
+			_note(buf, t, len_s * 0.92, hz(midi(n[0]) + song.get("lead_transpose", 0)), lead_wave, song.lead_vol,
 				song.get("lead_sustain", 0.6), song.get("lead_attack", 0.005))
 		t += len_s
 
