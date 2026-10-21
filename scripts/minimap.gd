@@ -53,6 +53,13 @@ func _draw() -> void:
 		draw_string(font, at, mark, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 0.9, 0.4))
 		prev = step.pos
 
+	# 지금 공격 중인 범위(공격자 색). 깜빡여서 눈에 띄게
+	var blink := 0.55 + 0.25 * sin(Time.get_ticks_msec() / 70.0)
+	for t: Vector2i in battle.attack_marks:
+		var col: Color = battle.attack_marks[t]
+		draw_rect(_cell_rect(t), Color(col.r, col.g, col.b, blink))
+		draw_rect(_cell_rect(t), col.lightened(0.4), false, 2.0)
+
 	# 전투원: 색 원 + 바라보는 쪽 삼각형. 1인칭에서 보고 있는 적은 노란 테두리
 	for i in battle.rules.fighters.size():
 		if battle.gone[i]:

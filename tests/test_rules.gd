@@ -39,6 +39,7 @@ func _init() -> void:
 	_test_dash()
 	_test_synth_sounds()
 	_test_bgm()
+	_test_bgm_slots()
 	_test_ai_fixed_slots()
 	_test_boss_pattern()
 	print("ALL PASSED" if failed == 0 else "FAILED: %d" % failed)
@@ -354,17 +355,30 @@ func _test_synth_sounds() -> void:
 		check(peak < 32767, "%s: 최대 음량 이하(클리핑 없음)" % name)
 
 
+## 장면 슬롯마다 곡이 걸려 있는지(사용자가 정한 배치).
+func _test_bgm_slots() -> void:
+	check(BgmSynth.resolve("forest") == "folk", "숲 = 민요풍")
+	check(BgmSynth.resolve("map") == "calm", "맵 = 잔잔함")
+	check(BgmSynth.resolve("title") == "calm_quiet", "타이틀 = 잔잔함(새소리 없음)")
+	check(not "birds" in BgmSynth.song_of("calm_quiet").ambient and "wind" in BgmSynth.song_of("calm_quiet").ambient, "타이틀 곡엔 새소리 없이 바람만")
+	check(BgmSynth.resolve("boss") == "adventure", "보스전 = 모험")
+	check(BgmSynth.resolve("cave") == "", "곡이 없는 슬롯은 무음")
+	for slot: String in BgmSynth.SLOTS:
+		check(BgmSynth.SONGS.has(BgmSynth.SLOTS[slot]), "%s 슬롯의 곡이 존재" % slot)
+
+
 ## 임시 배경음악: 마디 단위로 딱 떨어지는 길이(끊김 없는 반복), 반복 설정, 찢어짐 없음, 멜로디가 마디 수와 맞음.
 func _test_bgm() -> void:
 	for name: String in BgmSynth.SONGS:
-		var song: Dictionary = BgmSynth.SONGS[name]
+		var song: Dictionary = BgmSynth.song_of(name)
 		var eighths := 0
 		for n: Array in song.melody:
 			eighths += n[1]
-		check(eighths == song.chords.size() * 8, "%s: 멜로디 길이가 마디 수와 맞음 (%d/%d)" % [name, eighths, song.chords.size() * 8])
+		var per: int = BgmSynth.bar_eighths(song)
+		check(eighths == song.chords.size() * per, "%s: 멜로디 길이가 마디 수와 맞음 (%d/%d)" % [name, eighths, song.chords.size() * per])
 		var s: AudioStreamWAV = BgmSynth.make(name)
 		var frames: int = s.data.size() / 2
-		var expect := int(song.chords.size() * 8 * (60.0 / song.bpm / 2.0) * BgmSynth.RATE)
+		var expect := int(song.chords.size() * per * BgmSynth.eighth_sec(song) * BgmSynth.RATE)
 		check(frames == expect and s.loop_mode == AudioStreamWAV.LOOP_FORWARD and s.loop_end == frames, "%s: 반복 재생 설정" % name)
 		var peak := 0
 		for i in range(0, frames, 7):

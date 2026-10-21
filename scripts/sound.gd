@@ -77,16 +77,20 @@ func play_at(name: String, pos: Vector3, volume_db := 0.0, jitter := 0.05) -> vo
 	p.play()
 
 
-## 배경음악 전환. 같은 곡이면 이어서 틀고, 파일이 없으면 지금 곡을 페이드아웃만 한다.
+## 배경음악 전환. name 은 장면 슬롯(forest, title, map, boss …).
+## audio/bgm/<슬롯>.ogg 가 있으면 그 파일, 없으면 bgm_synth 의 SLOTS 에 걸린 곡.
+## 실제로 같은 곡이면(타이틀 → 맵처럼) 처음부터 다시 틀지 않고 그대로 이어 간다.
 func play_bgm(name: String) -> void:
-	if name == _bgm_name:
-		return
-	_bgm_name = name
 	var s := _load(BGM_DIR, name)
+	var key := "file:" + name if s != null else "synth:" + BgmSynth.resolve(name)
+	if key == _bgm_name:
+		return
+	_bgm_name = key
 	if s == null and BgmSynth.has(name):
-		if not _bgm_cache.has(name):
-			_bgm_cache[name] = BgmSynth.make(name)
-		s = _bgm_cache[name]
+		var song := BgmSynth.resolve(name)
+		if not _bgm_cache.has(song):
+			_bgm_cache[song] = BgmSynth.make(song)
+		s = _bgm_cache[song]
 	var tw := create_tween()
 	if _bgm.playing:
 		tw.tween_property(_bgm, "volume_db", -40.0, BGM_FADE * 0.5)

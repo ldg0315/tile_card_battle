@@ -43,6 +43,7 @@ const SPIN_TIME := 0.45
 const ORDER_MARK := ["①", "②", "③"]
 const ATTACK_SFX := {"lunge": "slash", "thrust": "thrust", "spin": "spin", "jump": "jump",
 	"arrow": "arrow", "volley": "volley", "wave": "wave"}
+const REST_TIME := 0.8  # 기 모으기 연출 길이
 const DEATH_HOLD := 0.9  # 쓰러진 모습을 보여주는 시간. 바로 사라지면 무엇이 쓰러졌는지 놓친다
 const DEATH_FADE := 0.7
 
@@ -67,6 +68,7 @@ var first_person := false
 var overview := false  # Space 를 누르는 동안 1인칭에서 잠깐 3인칭으로
 var minimap_always := false  # M: 3인칭에서도 미니맵 표시
 var preview_tiles: Array[Vector2i] = []  # 마우스를 올린 카드의 범위(미니맵도 같이 그린다)
+var attack_marks := {}  # 지금 공격 중인 칸 → 공격자 색. 1인칭에선 보드가 잘 안 보여 미니맵에도 칠한다
 var fp_target := 1  # 1인칭 카메라가 바라보는 적
 var enemy_plans := {}  # 적 번호 → 이번 턴 카드. 엿보기를 하려면 내가 고르기 전에 정해져 있어야 한다
 var boss_states := {}  # 적 번호 → 패턴 보스의 진행(페이즈·턴)
@@ -1196,7 +1198,10 @@ func _play_step(ev: Dictionary) -> void:
 			if type == "guard":
 				sprites[i].modulate = Color(0.6, 0.8, 1.0)
 				sprites[i].play("guard")
-			await _wait(0.4)
+				await _wait(0.4)
+			else:
+				_rest_fx(i)
+				await _wait(REST_TIME)
 
 	for i in n:
 		if cards[i].get("type", "") == "attack":
@@ -1254,6 +1259,7 @@ func _play_attack(i: int, card: Dictionary, ev: Dictionary) -> void:
 			continue
 		for t: Vector2i in h.tiles:
 			tile_mats[t].albedo_color = _color(i)
+			attack_marks[t] = _color(i)
 		var fp_me := i == 0 and first_person
 		if fp_me:
 			# 먼저 몸 정면으로 고개를 돌려 범위 칸을 보여준 뒤 공격 — 카메라 보간(약 0.3초)이 끝날 시간을 준다
@@ -1454,6 +1460,108 @@ func _ring_plane(pos: Vector3) -> MeshInstance3D:
 	mi.position = pos
 	add_child(mi)
 	return mi
+
+
+## 기 모으기: 발밑에서 파란 기운이 몸을 감싸며 소용돌이쳐 올라가고, 푸른 고리 두 개가 발에서 머리로 솟는다.
+## 몸도 잠깐 푸르게 빛나고 "+MP" 가 뜬다.
+func _rest_fx(i: int) -> void:
+	var feet := step_pos[i] + Vector3(0, -sprite_half[i], 0)
+	var height := sprite_half[i] * 2.0
+
+	# 1) 몸을 감싸며 올라가는 기 입자: 발밑 고리에서 뿜어, 접선 가속으로 돌고 안쪽으로 살짝 모이며 위로
+	var p := _particles(90, 0.9, Color(0.45, 0.75, 1.0, 1.0), Color(0.1, 0.3, 1.0))
+	p.one_shot = true
+	p.explosiveness = 0.0  # 한 번에 터지지 않고 기간 내내 뿜는다
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
+	p.emission_ring_axis = Vector3.UP
+	p.emission_ring_radius = 0.75
+	p.emission_ring_inner_radius = 0.5
+	p.emission_ring_height = 0.05
+	p.direction = Vector3.UP
+	p.spread = 8.0
+	p.initial_velocity_min = 1.6
+	p.initial_velocity_max = 2.6
+	p.gravity = Vector3(0, 0.6, 0)
+	p.tangential_accel_min = 4.0
+	p.tangential_accel_max = 6.0
+	p.radial_accel_min = -1.6
+	p.radial_accel_max = -0.8
+	p.scale_amount_min = 1.0
+	p.scale_amount_max = 1.8
+	p.position = feet + Vector3(0, 0.05, 0)
+	p.emitting = true
+
+	# 몸을 감싸는 푸른 빛기둥: 아래가 진하고 위로 갈수록 사라지는 원통. 입자만으론 "감싸는" 느낌이 약했다
+	var tex := GradientTexture2D.new()
+	var g := Gradient.new()
+	g.set_color(0, Color(0.3, 0.6, 1.0, 0.0))  # 위(UV 0)
+	g.set_color(1, Color(0.3, 0.6, 1.0, 0.75))  # 아래
+	tex.gradient = g
+	tex.fill_from = Vector2(0, 0)
+	tex.fill_to = Vector2(0, 1)
+	var aura_mat := StandardMaterial3D.new()
+	aura_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	aura_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	aura_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	aura_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	aura_mat.albedo_texture = tex
+	aura_mat.albedo_color = Color(1, 1, 1, 0)
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.5
+	cyl.bottom_radius = 0.75
+	cyl.height = height * 1.1
+	cyl.cap_top = false
+	cyl.cap_bottom = false
+	var aura := MeshInstance3D.new()
+	aura.mesh = cyl
+	aura.material_override = aura_mat
+	aura.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	aura.position = feet + Vector3(0, height * 0.55, 0)
+	add_child(aura)
+	var at := _tween()
+	at.tween_property(aura_mat, "albedo_color:a", 1.0, 0.2)
+	at.parallel().tween_property(aura, "rotation:y", TAU, REST_TIME)
+	at.tween_property(aura_mat, "albedo_color:a", 0.0, 0.35).set_delay(REST_TIME - 0.55)
+	at.tween_callback(aura.queue_free)
+
+	# 2) 발에서 머리로 솟는 푸른 고리 두 개(시간차)
+	for k in 2:
+		var ring := _ring_plane(feet + Vector3(0, 0.1, 0))
+		ring.scale = Vector3(0.32, 1, 0.32)
+		var m: ShaderMaterial = ring.material_override
+		m.set_shader_parameter("full", true)
+		m.set_shader_parameter("r_in", 0.7)
+		m.set_shader_parameter("r_out", 0.92)
+		m.set_shader_parameter("edge", Color(0.2, 0.5, 1.0))
+		m.set_shader_parameter("core", Color(0.75, 0.92, 1.0))
+		m.set_shader_parameter("fade", 0.0)
+		var tw := _tween()
+		tw.tween_interval(k * 0.22)
+		tw.tween_method(func(v: float) -> void:
+			ring.position.y = feet.y + 0.1 + v * height
+			ring.scale = Vector3(0.32 - v * 0.12, 1, 0.32 - v * 0.12)
+			m.set_shader_parameter("fade", sin(v * PI) * 0.95), 0.0, 1.0, 0.55).set_ease(Tween.EASE_OUT)
+		tw.tween_callback(ring.queue_free)
+
+	# 3) 몸이 푸르게 빛났다 돌아오고, +MP 표시
+	var s := sprites[i]
+	var glow := _tween()
+	glow.tween_property(s, "modulate", Color(0.65, 0.85, 1.0), 0.2)
+	glow.tween_property(s, "modulate", Color.WHITE, 0.45)
+	var l := Label3D.new()
+	l.text = "+%d MP" % Rules.REST_MP
+	l.font_size = 52
+	l.outline_size = 10
+	l.modulate = Color(0.55, 0.8, 1.0)
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	l.no_depth_test = true
+	_fit_label(l)
+	add_child(l)
+	l.position = s.position + Vector3(0.7, -0.3, 0.3)  # 머리 위 카드 이름표와 겹치지 않게 몸통 높이에서 시작
+	var lt := _tween().set_parallel(true)
+	lt.tween_property(l, "position:y", l.position.y + 1.0, 0.8)
+	lt.tween_property(l, "modulate:a", 0.0, 0.4).set_delay(0.4)
+	lt.chain().tween_callback(l.queue_free)
 
 
 ## 한 번 터지고 사라지는 빛 입자. 색은 from → to 로 바래며 투명해진다.
@@ -1860,6 +1968,7 @@ func sprite_tile(i: int) -> Vector2i:
 
 
 func _clear_tiles() -> void:
+	attack_marks.clear()
 	for t: Vector2i in tile_mats:
 		tile_mats[t].albedo_color = _tile_color(t)
 
