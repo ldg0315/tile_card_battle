@@ -36,6 +36,7 @@ const CARD_ACCENT := {
 	"move": Color(0.45, 0.8, 0.45),
 	"guard": Color(0.5, 0.7, 0.95),
 	"rest": Color(0.5, 0.7, 0.95),
+	"heal": Color(0.45, 0.85, 0.55),
 	"attack": Color(0.95, 0.4, 0.35),
 }
 # 1인칭 회전베기 때 카메라를 한 바퀴 돌릴지. 짧지만 어지러우면 false 로 — 무기 휩쓸기와 칼바람 고리만 남는다
@@ -50,6 +51,15 @@ const DEATH_FADE := 0.7
 
 var rules
 var theme: Dictionary  # 장 테마(themes.gd). 전투 장면을 다시 열기 전까지 바뀌지 않는다
+# 배경 그림(art/bg/<테마>.png). 있으면 3인칭은 화면 전체에 그림을 깔고(격자는 반투명), 1인칭은 같은 그림을 둘러싼 하늘로.
+# 화면 고정 그림을 1인칭에도 쓰면 고개를 돌려도 배경이 따라 움직이지 않아 어색해서 시점마다 다르게 쓴다
+var backdrop: Texture2D
+var world_env: WorldEnvironment
+var env_tp: Environment
+var env_fp: Environment
+var backdrop_layer: CanvasLayer
+var scenery_root: Node3D  # 코드로 만든 땅·바다·소품(배경 그림이 있으면 3인칭에선 숨긴다)
+var _backdrop_fp := -1  # 마지막으로 맞춘 시점(-1 = 아직)
 var rng := RandomNumberGenerator.new()
 var turn := 0
 var busy := false
@@ -103,6 +113,7 @@ var result_panel: PanelContainer
 var result_label: Label
 var result_buttons: HBoxContainer
 var card_buttons := {}  # card id -> Button
+var compact_cards := false  # 손패가 많아 카드 폭을 줄였으면 카드 글씨도 짧게
 var view_button: Button
 var peek_label: Label
 var warn_label: Label
@@ -121,6 +132,7 @@ func _ready() -> void:
 		if a.begins_with("--theme="):
 			theme_id = a.substr(8)  # 개발용: 아직 스테이지가 없는 테마(해안가 등) 배경 확인
 	theme = Themes.get_theme(theme_id)
+	backdrop = CharArt.background(theme_id)
 	# 배경음악: 보스 스테이지면 보스곡, 아니면 장 테마 곡(audio/bgm/forest.ogg 등). 파일이 없으면 무음
 	Sound.play_bgm("boss" if Game.current_stage().get("boss", false) else theme_id)
 	_build_world()
@@ -137,7 +149,10 @@ func _world(t: Vector2i) -> Vector3:
 
 
 func _tile_color(t: Vector2i) -> Color:
-	return theme.tile_a if (t.x + t.y) % 2 == 0 else theme.tile_b
+	var c: Color = theme.tile_a if (t.x + t.y) % 2 == 0 else theme.tile_b
+	if backdrop:
+		c.a = 0.45  # 배경 그림 위에 격자만 살짝 — 그림이 비쳐 보이게
+	return c
 
 
 func _color(i: int) -> Color:
@@ -166,6 +181,27 @@ func _build_world() -> void:
 		e.fog_density = theme.fog
 	env.environment = e
 	add_child(env)
+	world_env = env
+	if backdrop:
+		env_fp = e
+		var pano := PanoramaSkyMaterial.new()
+		pano.panorama = backdrop
+		var psky := Sky.new()
+		psky.sky_material = pano
+		env_fp.sky = psky
+		env_tp = e.duplicate()
+		env_tp.background_mode = Environment.BG_CANVAS
+		env_tp.background_canvas_max_layer = -1  # 레이어 -1 이하의 2D(배경 그림)를 3D 뒤에 그린다
+		backdrop_layer = CanvasLayer.new()
+		backdrop_layer.layer = -10
+		var bg := TextureRect.new()
+		bg.texture = backdrop
+		bg.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+		backdrop_layer.add_child(bg)
+		add_child(backdrop_layer)
 
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-55, -30, 0)
@@ -195,6 +231,8 @@ func _build_world() -> void:
 			box.size = Vector3(TILE * 0.92, 0.25, TILE * 0.92)
 			var mat := StandardMaterial3D.new()
 			mat.albedo_color = _tile_color(t)
+			if backdrop:
+				mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			var m := MeshInstance3D.new()
 			m.mesh = box
 			m.material_override = mat
@@ -273,6 +311,8 @@ func _ensure_fighter_nodes(n: int) -> void:
 ## 테마 배경: 넓은 땅, (해안이면) 바다, 보드 둘레의 소품.
 ## 소품 배치는 테마 이름으로 시드를 고정해, 같은 장에선 늘 같은 풍경이 나오게 한다(다시 하기마다 숲이 바뀌면 어색).
 func _build_scenery() -> void:
+	scenery_root = Node3D.new()
+	add_child(scenery_root)
 	var ground := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(90, 90)
@@ -281,7 +321,7 @@ func _build_scenery() -> void:
 	gmat.albedo_color = theme.ground
 	ground.material_override = gmat
 	ground.position = Vector3(0, -0.26, 0)
-	add_child(ground)
+	scenery_root.add_child(ground)
 
 	if theme.has("water"):
 		var sea := MeshInstance3D.new()
@@ -295,7 +335,7 @@ func _build_scenery() -> void:
 		wmat.roughness = 0.15
 		sea.material_override = wmat
 		sea.position = Vector3(0, -0.22, -37)  # 보드 뒤편(z < -7)이 바다
-		add_child(sea)
+		scenery_root.add_child(sea)
 
 	var prng := RandomNumberGenerator.new()
 	prng.seed = hash(theme.get("sky_top"))
@@ -317,7 +357,7 @@ func _build_scenery() -> void:
 			p.pixel_size = h / tex.get_height()
 			p.flip_h = prng.randf() < 0.5
 			p.position = pos + Vector3(0, h / 2.0 - 0.25, 0)
-			add_child(p)
+			scenery_root.add_child(p)
 
 
 ## 보드와 그 앞쪽(카메라 쪽)은 비워 둔다 — 소품이 칸이나 캐릭터를 가리면 안 된다.
@@ -616,21 +656,32 @@ func _build_hand() -> void:
 	moves.add_theme_constant_override("h_separation", 4)
 	moves.add_theme_constant_override("v_separation", 4)
 	hand_box.add_child(moves)
+	var big := 0
+	for id: String in rules.hand(0):
+		big += 0 if Cards.get_card(id).type == "move" else 1
+	# 보상으로 카드가 늘면 한 줄에 다 들어가도록 폭을 계산한다(화면 1280 - 여백, 이동 버튼 묶음 몫을 빼고 나눔)
+	var move_w := 96 if big <= 6 else 76
+	var room := 1280 - 40 - (move_w * 4 + 12) - 8 * (big + 1)
+	var big_w := clampi(room / maxi(big, 1), 70, 118)
+	compact_cards = big_w < 118
 	for id: String in rules.hand(0):
 		var card: Dictionary = Cards.get_card(id)
 		var b := Button.new()
 		b.text = _card_text(card)
 		b.focus_mode = Control.FOCUS_NONE
+		b.clip_text = compact_cards  # 폭을 줄였을 때만 — 보통 폭에선 자르면 "MP 15" 의 숫자가 잘렸다
 		_style_button(b, CARD_ACCENT[card.type])
 		b.pressed.connect(_on_card_pressed.bind(id))
 		b.mouse_entered.connect(_preview.bind(id))
 		b.mouse_exited.connect(_end_preview)
 		if card.type == "move":
-			b.custom_minimum_size = Vector2(96, 35)
-			b.add_theme_font_size_override("font_size", 14)
+			b.custom_minimum_size = Vector2(move_w, 35)
+			b.add_theme_font_size_override("font_size", 14 if move_w >= 96 else 12)
 			moves.add_child(b)
 		else:
-			b.custom_minimum_size = Vector2(118, 74)
+			b.custom_minimum_size = Vector2(big_w, 74)
+			if big_w < 118:
+				b.add_theme_font_size_override("font_size", 13 if big_w >= 90 else 12)
 			hand_box.add_child(b)
 		card_buttons[id] = b
 
@@ -641,13 +692,34 @@ func _style_button(b: Button, accent: Color) -> void:
 
 
 func _card_text(card: Dictionary) -> String:
+	if compact_cards:
+		return _card_text_short(card)
 	if card.type == "move":
 		return card.name if card.cost == 0 else "%s · MP %d" % [card.name, card.cost]
 	if card.type == "guard":
-		return "방어\n받는 피해 -%d" % Rules.GUARD_BLOCK
+		var block: int = card.get("block", Rules.GUARD_BLOCK)
+		return "%s\n받는 피해 -%d%s" % [card.name, block, " · MP %d" % card.cost if card.cost > 0 else ""]
+	if card.type == "heal":
+		return "%s\nHP +%d · MP %d" % [card.name, card.heal, card.cost]
 	if card.type == "rest":
 		return "기 모으기\nMP +%d" % Rules.REST_MP
 	return "%s\n피해 %d · MP %d" % [card.name, card.dmg, card.cost]
+
+
+## 손패가 많을 때의 짧은 표기: 숫자만(피해/회복/막는 양 · MP).
+func _card_text_short(card: Dictionary) -> String:
+	match card.type:
+		"move":
+			# "← 왼쪽" 은 좁은 버튼에서 잘려서, 화살표 + 칸 수로(1칸 / 2칸·MP)
+			var arrow: String = card.name.split(" ")[0]
+			return "%s 1칸" % arrow if card.cost == 0 else "%s 2칸·%d" % [arrow, card.cost]
+		"guard":
+			return "%s\n-%d%s" % [card.name, card.get("block", Rules.GUARD_BLOCK), " ·MP%d" % card.cost if card.cost > 0 else ""]
+		"rest":
+			return "기 모으기\n+%d" % Rules.REST_MP
+		"heal":
+			return "%s\n+%d ·MP%d" % [card.name, card.heal, card.cost]
+	return "%s\n%d ·MP%d" % [card.name, card.dmg, card.cost]
 
 
 # ---------------------------------------------------------------- 진행
@@ -656,8 +728,9 @@ func _card_text(card: Dictionary) -> String:
 func _new_game() -> void:
 	var cfg: Dictionary = Game.battle_config()
 	rules = Rules.new(cfg.player, cfg.enemies)
-	if cfg.player_hp >= 0:
-		rules.fighters[0].hp = cfg.player_hp
+	rules.fighters[0].extra.assign(cfg.extra_cards)  # 이번 던전에서 보상으로 얻은 카드
+	rules.fighters[0].max_hp += cfg.max_hp_bonus
+	rules.fighters[0].hp = cfg.player_hp if cfg.player_hp >= 0 else rules.fighters[0].max_hp
 	for k in cfg.enemies.size():
 		if cfg.enemy_hp[k] > 0:
 			rules.fighters[k + 1].max_hp = cfg.enemy_hp[k]
@@ -672,6 +745,9 @@ func _new_game() -> void:
 		var frames := CharArt.build_frames(f.char_id)
 		var s := sprites[i]
 		s.sprite_frames = frames
+		# 도트는 각지게, 큰 그림(캡처·일러스트 풍)은 부드럽게 + 밉맵(작게 그려질 때 지글거림 방지)
+		s.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS if CharArt.is_smooth(frames) \
+			else BaseMaterial3D.TEXTURE_FILTER_NEAREST
 		var height: float = CHAR_HEIGHT * Cards.CHARACTERS[f.char_id].get("scale", 1.0)
 		sprite_half[i] = height / 2.0
 		s.pixel_size = height / frames.get_frame_texture("idle", 0).get_height()
@@ -859,10 +935,19 @@ func _show_result() -> void:
 			_result_button("다음 전투 (%d/%d)" % [Game.wave + 2, waves], Color(0.95, 0.8, 0.3), func() -> void:
 				Game.on_single_won(rules.fighters[0].hp)
 				Game.goto_battle())
-		elif rules.winner == 0:
-			_result_button("던전 클리어!" if Game.is_final_stage() else "다음으로", Color(0.95, 0.8, 0.3), func() -> void:
+		elif rules.winner == 0 and Game.is_final_stage():
+			_result_button("던전 클리어!", Color(0.95, 0.8, 0.3), func() -> void:
 				Game.on_single_won(rules.fighters[0].hp)
 				Game.goto_map())
+		elif rules.winner == 0:
+			# 스테이지 보상: 셋 중 하나를 골라야 다음으로 넘어간다
+			result_label.text = "승리!  보상을 하나 고르세요"
+			for opt: Dictionary in Game.reward_options(rng):
+				_result_button("%s\n%s" % [opt.name, opt.desc], Color(0.55, 0.85, 0.6) if opt.kind == "card" else Color(0.95, 0.8, 0.3),
+					func() -> void:
+						Game.on_single_won(rules.fighters[0].hp)
+						Game.take_reward(opt)
+						Game.goto_map(), Vector2(200, 64))
 		else:
 			# 무승부도 패배로 친다 — 보스와 맞교환으로 끝났는데 다음으로 넘어가면 허무하다
 			_result_button("처음부터 다시", Color(0.95, 0.8, 0.3), func() -> void:
@@ -874,10 +959,10 @@ func _show_result() -> void:
 	result_panel.show()
 
 
-func _result_button(text: String, accent: Color, action: Callable) -> void:
+func _result_button(text: String, accent: Color, action: Callable, size := Vector2(150, 40)) -> void:
 	var b := Button.new()
 	b.text = text
-	b.custom_minimum_size = Vector2(150, 40)
+	b.custom_minimum_size = size
 	_style_button(b, accent)
 	b.pressed.connect(Sound.play.bind("click"))
 	b.pressed.connect(action)
@@ -973,6 +1058,7 @@ func _process(delta: float) -> void:
 	cam_smooth = target if fp_spin != 0.0 else cam_smooth.interpolate_with(target, k)
 	cam.global_transform = Transform3D(cam_smooth.basis, cam_smooth.origin + shake_off)
 	cam.fov = lerpf(cam.fov, FP_FOV if fp else TP_FOV, k) + fov_kick
+	_apply_backdrop(fp)
 	if fp:
 		_update_fp_hud()
 	# Space 로 잠깐 3인칭을 보는 동안엔 1인칭 전용 표시(나침반·화면 밖 표시)를 숨긴다
@@ -983,6 +1069,16 @@ func _process(delta: float) -> void:
 	minimap.visible = first_person or minimap_always
 	if minimap.visible:
 		minimap.queue_redraw()
+
+
+## 배경 그림이 있을 때 시점에 맞춰 바꾼다: 3인칭 = 화면 전체 그림(땅·소품 숨김), 1인칭 = 파노라마 하늘 + 땅·소품.
+func _apply_backdrop(fp: bool) -> void:
+	if backdrop == null or _backdrop_fp == int(fp):
+		return
+	_backdrop_fp = int(fp)
+	world_env.environment = env_fp if fp else env_tp
+	backdrop_layer.visible = not fp
+	scenery_root.visible = fp
 
 
 ## 눈은 내 위치, 시선은 바라보는 적. 적이 옆이나 뒤에 있어도 화면에서 놓치지 않게 고개를 돌린다.
@@ -1212,13 +1308,20 @@ func _play_step(ev: Dictionary) -> void:
 
 	for i in n:
 		var type: String = cards[i].get("type", "")
-		if type == "guard" or type == "rest":
+		if type == "guard" or type == "rest" or type == "heal":
 			_show_tag(i, cards[i])
-			Sound.play_at(type, step_pos[i], -2.0)  # "guard" / "rest"
+			if ev.fizzled[i]:
+				card_tags[i].text = cards[i].name + " (MP 부족)"
+				await _wait(0.4)
+				continue
+			Sound.play_at(type, step_pos[i], -2.0)  # "guard" / "rest" / "heal"
 			if type == "guard":
 				sprites[i].modulate = Color(0.6, 0.8, 1.0)
 				sprites[i].play("guard")
 				await _wait(0.4)
+			elif type == "heal":
+				_rest_fx(i, Color(0.45, 1.0, 0.55), Color(0.1, 0.7, 0.25), "+%d HP" % ev.healed[i])
+				await _wait(REST_TIME)
 			else:
 				_rest_fx(i)
 				await _wait(REST_TIME)
@@ -1484,12 +1587,13 @@ func _ring_plane(pos: Vector3) -> MeshInstance3D:
 
 ## 기 모으기: 발밑에서 파란 기운이 몸을 감싸며 소용돌이쳐 올라가고, 푸른 고리 두 개가 발에서 머리로 솟는다.
 ## 몸도 잠깐 푸르게 빛나고 "+MP" 가 뜬다.
-func _rest_fx(i: int) -> void:
+## 기본은 파란 기(기 모으기). 치유는 같은 연출을 초록으로 쓴다.
+func _rest_fx(i: int, tint := Color(0.45, 0.75, 1.0), deep := Color(0.1, 0.3, 1.0), text := "") -> void:
 	var feet := step_pos[i] + Vector3(0, -sprite_half[i], 0)
 	var height := sprite_half[i] * 2.0
 
 	# 1) 몸을 감싸며 올라가는 기 입자: 발밑 고리에서 뿜어, 접선 가속으로 돌고 안쪽으로 살짝 모이며 위로
-	var p := _particles(90, 0.9, Color(0.45, 0.75, 1.0, 1.0), Color(0.1, 0.3, 1.0))
+	var p := _particles(90, 0.9, Color(tint.r, tint.g, tint.b, 1.0), deep)
 	p.one_shot = true
 	p.explosiveness = 0.0  # 한 번에 터지지 않고 기간 내내 뿜는다
 	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
@@ -1514,8 +1618,9 @@ func _rest_fx(i: int) -> void:
 	# 몸을 감싸는 푸른 빛기둥: 아래가 진하고 위로 갈수록 사라지는 원통. 입자만으론 "감싸는" 느낌이 약했다
 	var tex := GradientTexture2D.new()
 	var g := Gradient.new()
-	g.set_color(0, Color(0.3, 0.6, 1.0, 0.0))  # 위(UV 0)
-	g.set_color(1, Color(0.3, 0.6, 1.0, 0.75))  # 아래
+	var mid := tint.lerp(deep, 0.5)
+	g.set_color(0, Color(mid.r, mid.g, mid.b, 0.0))  # 위(UV 0)
+	g.set_color(1, Color(mid.r, mid.g, mid.b, 0.75))  # 아래
 	tex.gradient = g
 	tex.fill_from = Vector2(0, 0)
 	tex.fill_to = Vector2(0, 1)
@@ -1552,8 +1657,8 @@ func _rest_fx(i: int) -> void:
 		m.set_shader_parameter("full", true)
 		m.set_shader_parameter("r_in", 0.7)
 		m.set_shader_parameter("r_out", 0.92)
-		m.set_shader_parameter("edge", Color(0.2, 0.5, 1.0))
-		m.set_shader_parameter("core", Color(0.75, 0.92, 1.0))
+		m.set_shader_parameter("edge", deep.lightened(0.2))
+		m.set_shader_parameter("core", tint.lightened(0.5))
 		m.set_shader_parameter("fade", 0.0)
 		var tw := _tween()
 		tw.tween_interval(k * 0.22)
@@ -1566,13 +1671,13 @@ func _rest_fx(i: int) -> void:
 	# 3) 몸이 푸르게 빛났다 돌아오고, +MP 표시
 	var s := sprites[i]
 	var glow := _tween()
-	glow.tween_property(s, "modulate", Color(0.65, 0.85, 1.0), 0.2)
+	glow.tween_property(s, "modulate", tint.lightened(0.3), 0.2)
 	glow.tween_property(s, "modulate", Color.WHITE, 0.45)
 	var l := Label3D.new()
-	l.text = "+%d MP" % Rules.REST_MP
+	l.text = text if text != "" else "+%d MP" % Rules.REST_MP
 	l.font_size = 52
 	l.outline_size = 10
-	l.modulate = Color(0.55, 0.8, 1.0)
+	l.modulate = tint
 	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	l.no_depth_test = true
 	_fit_label(l)

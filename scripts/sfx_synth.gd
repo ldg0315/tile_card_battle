@@ -44,6 +44,9 @@ const PRESETS := {
 		{"wave": "square", "f0": 1500, "f1": 2100, "dur": 0.2, "vol": 0.16, "curve": 1.5}]},
 	"guard": {"notes": [{"wave": "square", "f0": 330, "f1": 440, "dur": 0.08, "vol": 0.2, "curve": 1.5}]},
 	"rest": {"notes": [{"wave": "sine", "f0": 600, "f1": 1300, "dur": 0.28, "vol": 0.2, "vib": 12.0, "curve": 0.8}]},
+	"heal": {"notes": [{"wave": "sine", "f0": 523, "dur": 0.1, "vol": 0.2, "curve": 0.6},
+		{"wave": "sine", "f0": 659, "dur": 0.1, "vol": 0.2, "curve": 0.6},
+		{"wave": "sine", "f0": 784, "dur": 0.25, "vol": 0.2, "vib": 8.0, "curve": 0.8}]},
 	"death": {"notes": [{"wave": "square", "f0": 420, "f1": 70, "dur": 0.55, "vol": 0.25, "curve": 0.9}]},
 	# 보스·결과
 	"warn": {"notes": [{"wave": "square", "f0": 880, "dur": 0.12, "vol": 0.18, "curve": 0.3, "gap": 0.05},

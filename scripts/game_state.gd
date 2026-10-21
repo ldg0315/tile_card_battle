@@ -39,7 +39,16 @@ var player_char := "sword"
 var chapter := 0
 var stage := 0  # 장 안에서의 순서
 var wave := 0  # 스테이지 안 연속전에서 몇 번째 전투인지
-var player_hp := -1  # -1 이면 캐릭터 최대 HP 로 시작
+var player_hp := -1  # -1 이면 최대 HP 로 시작
+var extra_cards: Array[String] = []  # 이번 던전에서 보상으로 얻은 카드
+var max_hp_bonus := 0  # 보상 "단련"으로 늘어난 최대 HP
+
+# 카드가 아닌 즉시 보상. 카드 보상과 함께 후보로 섞여 나온다
+const INSTANT_REWARDS := {
+	"first_aid": {"name": "응급 처치", "desc": "HP 40 회복", "heal": 40},
+	"training": {"name": "단련", "desc": "최대 HP +15", "max_hp": 15},
+}
+const REWARD_CHOICES := 3
 
 
 func _ready() -> void:
@@ -60,10 +69,16 @@ func start_single(from_chapter := 0, from_stage := 0) -> void:
 	stage = clampi(from_stage, 0, CHAPTERS[chapter].stages.size() - 1)
 	wave = 0
 	player_hp = -1
+	extra_cards.clear()
+	max_hp_bonus = 0
 
 
 func start_versus() -> void:
 	mode = "versus"
+
+
+func player_max_hp() -> int:
+	return max_hp(player_char) + (max_hp_bonus if mode == "single" else 0)
 
 
 func is_cleared() -> bool:
@@ -125,8 +140,9 @@ func battle_config() -> Dictionary:
 			ids.append(e.id)
 			hps.append(enemy_hp(e))
 		return {"player": player_char, "enemies": ids, "enemy_hp": hps, "player_hp": player_hp,
-			"theme": current_chapter().theme}
-	return {"player": player_char, "enemies": [versus_enemy()], "enemy_hp": [-1], "player_hp": -1, "theme": VERSUS_THEME}
+			"theme": current_chapter().theme, "extra_cards": extra_cards, "max_hp_bonus": max_hp_bonus}
+	return {"player": player_char, "enemies": [versus_enemy()], "enemy_hp": [-1], "player_hp": -1, "theme": VERSUS_THEME,
+		"extra_cards": [], "max_hp_bonus": 0}
 
 
 ## 이긴 뒤 진행. 연속전이 남았으면 같은 스테이지의 다음 적(회복 없음), 아니면 다음 스테이지로.
@@ -142,7 +158,58 @@ func on_single_won(hp_left: int) -> void:
 		stage = 0
 		player_hp = -1
 	else:
-		player_hp = mini(hp_left + HEAL_BETWEEN, max_hp(player_char))
+		player_hp = mini(hp_left + HEAL_BETWEEN, player_max_hp())
+
+
+## 스테이지 보상 후보 3개. 아직 없는 카드(내 기술 + 공용)와 즉시 보상을 섞어 뽑는다.
+## 카드 후보가 남아 있으면 최소 한 장은 카드가 나오게 한다 — 즉시 보상만 나오면 덱이 자라는 재미가 없다.
+## 반환: [{kind: "card"|"instant", id, name, desc}]
+func reward_options(rng: RandomNumberGenerator) -> Array:
+	var cards := []
+	for id in Cards.reward_cards_for(player_char):
+		if not extra_cards.has(id):
+			cards.append(id)
+	var pool := []
+	for id in cards:
+		pool.append(_card_option(id))
+	for id: String in INSTANT_REWARDS:
+		pool.append({"kind": "instant", "id": id, "name": INSTANT_REWARDS[id].name, "desc": INSTANT_REWARDS[id].desc})
+	var out := []
+	if not cards.is_empty():
+		var first: Dictionary = _card_option(cards[rng.randi_range(0, cards.size() - 1)])
+		out.append(first)
+		pool = pool.filter(func(o: Dictionary) -> bool: return o.id != first.id)
+	while out.size() < REWARD_CHOICES and not pool.is_empty():
+		out.append(pool.pop_at(rng.randi_range(0, pool.size() - 1)))
+	return out
+
+
+func _card_option(id: String) -> Dictionary:
+	var c: Dictionary = Cards.get_card(id)
+	var desc := ""
+	match c.type:
+		"attack":
+			desc = "새 기술 · 피해 %d · MP %d" % [c.dmg, c.cost]
+		"heal":
+			desc = "카드 · HP +%d · MP %d" % [c.heal, c.cost]
+		"guard":
+			desc = "카드 · 받는 피해 -%d · MP %d" % [c.block, c.cost]
+	return {"kind": "card", "id": id, "name": c.name, "desc": desc}
+
+
+## 고른 보상을 적용한다. 스테이지를 넘긴 뒤(on_single_won 다음)에 부른다 — HP 회복이 넘어갈 때의 회복과 겹쳐도 최대치를 넘지 않게.
+func take_reward(opt: Dictionary) -> void:
+	if opt.kind == "card":
+		extra_cards.append(opt.id)
+		return
+	var r: Dictionary = INSTANT_REWARDS[opt.id]
+	var cur := player_hp if player_hp >= 0 else player_max_hp()
+	if r.has("max_hp"):
+		max_hp_bonus += r.max_hp
+		cur += r.max_hp
+	if r.has("heal"):
+		cur += r.heal
+	player_hp = mini(cur, player_max_hp())
 
 
 func goto_title() -> void:
@@ -175,13 +242,17 @@ func choose_character(char_id: String) -> void:
 ##   -- --char=archer   플레이 캐릭터 (기본 검사, 아래 옵션과 함께)
 ##   -- --stage=1-3     싱글 해당 스테이지 전투로 바로 ("3" 처럼 숫자만 쓰면 1장)
 ##   -- --wave=2        (--stage 와 함께) 연속전의 N번째 적부터
+##   -- --extra=heal,sword_iai  (--stage 와 함께) 보상 카드를 얻은 상태로
 ##   -- --map           싱글 스테이지 맵으로 바로
 ##   -- --versus        AI 대전으로 바로
 func handle_skip_args() -> bool:
 	var args := OS.get_cmdline_user_args()
+	var extra := []
 	for a in args:
 		if a.begins_with("--char="):
 			player_char = a.substr(7)
+		elif a.begins_with("--extra="):
+			extra = Array(a.substr(8).split(","))  # 보상 카드를 미리 얻은 상태로 시작(개발용)
 	for a in args:
 		if a.begins_with("--stage="):
 			var code := a.substr(8).split("-")
@@ -189,6 +260,7 @@ func handle_skip_args() -> bool:
 				start_single(int(code[0]) - 1, int(code[1]) - 1)
 			else:
 				start_single(0, int(code[0]) - 1)
+			extra_cards.assign(extra)
 			for w in args:
 				if w.begins_with("--wave="):
 					wave = clampi(int(w.substr(7)) - 1, 0, current_stage().waves.size() - 1)

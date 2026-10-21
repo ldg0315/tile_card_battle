@@ -28,6 +28,7 @@ class Fighter:
 	var max_hp := MAX_HP  # 몬스터는 캐릭터마다 다르다(cards.gd 의 hp)
 	var hp := MAX_HP
 	var mp := START_MP
+	var extra: Array[String] = []  # 스테이지 보상으로 얻어 손패에 더해진 카드
 
 	func alive() -> bool:
 		return hp > 0
@@ -41,6 +42,7 @@ class Fighter:
 		f.facing = facing
 		f.hp = hp
 		f.mp = mp
+		f.extra = extra.duplicate()
 		return f
 
 
@@ -83,7 +85,11 @@ static func in_board(t: Vector2i) -> bool:
 
 
 func hand(idx: int) -> Array[String]:
-	return Cards.hand_for(fighters[idx].char_id)
+	var h := Cards.hand_for(fighters[idx].char_id)
+	for id in fighters[idx].extra:
+		if not h.has(id):
+			h.append(id)
+	return h
 
 
 ## idx 의 적(다른 팀) 중 살아 있는 전투원 번호.
@@ -176,7 +182,9 @@ func _resolve_step(ids: Array) -> Dictionary:
 	var cards := []
 	for i in n:
 		cards.append(Cards.get_card(ids[i]) if ids[i] != "" else {})
-	var ev := {"cards": ids, "hits": [], "fizzled": _filled(n, false), "guarding": _filled(n, false), "died": []}
+	var ev := {"cards": ids, "hits": [], "fizzled": _filled(n, false), "guarding": _filled(n, false), "died": [],
+		"healed": _filled(n, 0)}
+	var block_of := _filled(n, 0)  # 이번 단계 방어량(철벽 방어는 더 많이 막는다)
 
 	# 1) 이동을 공격보다 먼저 처리한다 — 같은 단계에서 "피하는" 카드가 의미를 가지려면 이동이 선행해야 한다
 	var old := []
@@ -216,13 +224,25 @@ func _resolve_step(ids: Array) -> Dictionary:
 		if cards[i].get("type", "") == "move" and not ev.fizzled[i]:
 			_face_nearest(i)
 
-	# 2) 방어·기 모으기
+	# 2) 방어·기 모으기·치유
 	for i in n:
-		match cards[i].get("type", ""):
+		var type: String = cards[i].get("type", "")
+		if type in ["guard", "heal"]:
+			var cost := int(cards[i].get("cost", 0))
+			if fighters[i].mp < cost:
+				ev.fizzled[i] = true
+				continue
+			fighters[i].mp -= cost
+		match type:
 			"guard":
 				ev.guarding[i] = true
+				block_of[i] = int(cards[i].get("block", GUARD_BLOCK))
 			"rest":
 				fighters[i].mp = mini(MAX_MP, fighters[i].mp + REST_MP)
+			"heal":
+				var before := fighters[i].hp
+				fighters[i].hp = mini(fighters[i].max_hp, fighters[i].hp + int(cards[i].heal))
+				ev.healed[i] = fighters[i].hp - before
 
 	# 3) 공격은 동시 판정. 데미지를 모았다가 마지막에 적용해야
 	#    같은 단계에서 먼저 처리된 쪽 때문에 상대 공격이 사라지는 일이 없다(맞교환 → 무승부 가능).
@@ -247,7 +267,7 @@ func _resolve_step(ids: Array) -> Dictionary:
 			if back:
 				raw = int(raw * BACKSTAB_MULT)
 			# 방어는 정면만 막는다 — 등을 내준 쪽이 방어 카드로 손해를 만회하지 못해야 뒤잡기가 의미 있다
-			var block := GUARD_BLOCK if ev.guarding[j] and not back else 0
+			var block: int = block_of[j] if not back else 0
 			var d := maxi(0, raw - block)
 			dmg[j] += d
 			targets.append({"to": j, "dmg": d, "back": back})

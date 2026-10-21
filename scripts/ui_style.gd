@@ -46,13 +46,19 @@ static func label(text: String, size: int, color := Color.WHITE) -> Label:
 	return l
 
 
-## 캐릭터 대기 첫 프레임을 도트 그대로(nearest) 확대해 보여주는 그림.
+## 캐릭터 대기 첫 프레임 그림. 도트는 각지게, 큰 그림은 부드럽게 확대한다(char_art 의 "smooth").
+## scale 은 "48px 높이 도트 기준" 배율이라, 그림 해상도가 달라도 화면에 같은 크기로 나온다.
+const PORTRAIT_BASE_H := 48.0
+
+
 static func portrait(frames: SpriteFrames, scale: float) -> TextureRect:
 	var tex := frames.get_frame_texture("idle", 0)
 	var r := TextureRect.new()
 	r.texture = tex
-	r.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	r.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS if frames.get_meta("smooth", false) \
+		else CanvasItem.TEXTURE_FILTER_NEAREST
 	r.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	r.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	r.custom_minimum_size = Vector2(tex.get_width(), tex.get_height()) * scale
+	var k := scale * PORTRAIT_BASE_H / tex.get_height()
+	r.custom_minimum_size = Vector2(tex.get_width(), tex.get_height()) * k
 	return r

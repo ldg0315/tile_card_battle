@@ -153,13 +153,50 @@ const CHARACTERS := {
 }
 
 
+# 스테이지 보상으로만 얻는 카드. 캐릭터별 기술 + 공용(아무 캐릭터나).
+# 얻은 카드는 그 던전을 도는 동안 손패에 더해진다(Game.extra_cards → Fighter.extra).
+const REWARDS := {
+	"sword": {
+		"sword_cross": {"name": "십자베기", "anim": "lunge", "type": "attack", "cost": 20, "dmg": 20,
+			"range": [Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]},
+		"sword_iai": {"name": "발도술", "anim": "thrust", "type": "attack", "cost": 40, "dmg": 45,
+			"range": [Vector2i(1, 0)]},
+		"sword_rush": {"name": "돌진베기", "anim": "thrust", "type": "attack", "cost": 25, "dmg": 20,
+			"range": [Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0)]},
+	},
+	"archer": {
+		"archer_pierce": {"name": "관통 화살", "anim": "arrow", "type": "attack", "cost": 25, "dmg": 28,
+			"range": [Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0)]},
+		"archer_spread": {"name": "산탄 화살", "anim": "volley", "type": "attack", "cost": 20, "dmg": 15,
+			"range": [Vector2i(1, -1), Vector2i(1, 0), Vector2i(1, 1), Vector2i(2, -1), Vector2i(2, 0), Vector2i(2, 1)]},
+		"archer_snipe": {"name": "저격", "anim": "arrow", "type": "attack", "cost": 35, "dmg": 45,
+			"range": [Vector2i(3, 0)]},
+	},
+	"common": {
+		"heal": {"name": "치유", "type": "heal", "cost": 20, "heal": 25},
+		"iron_guard": {"name": "철벽 방어", "type": "guard", "cost": 10, "block": 30},
+	},
+}
+
+
 static func get_card(id: String) -> Dictionary:
 	if COMMON.has(id):
 		return COMMON[id]
 	for c: Dictionary in CHARACTERS.values():
 		if c.attacks.has(id):
 			return c.attacks[id]
+	for group: Dictionary in REWARDS.values():
+		if group.has(id):
+			return group[id]
 	return {}
+
+
+## 이 캐릭터가 보상으로 얻을 수 있는 카드(자기 기술 + 공용).
+static func reward_cards_for(char_id: String) -> Array[String]:
+	var out: Array[String] = []
+	out.assign(REWARDS.get(char_id, {}).keys())
+	out.append_array(REWARDS.common.keys())
+	return out
 
 
 ## 공통 카드 + 캐릭터 고유 공격. 손패는 매 턴 전부 열려 있고 그중 3장을 고른다.

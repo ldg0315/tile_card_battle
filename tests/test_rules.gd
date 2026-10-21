@@ -38,6 +38,9 @@ func _init() -> void:
 	_test_mp_regen()
 	_test_dash()
 	_test_dash_only_players_and_bosses()
+	_test_reward_cards_in_battle()
+	_test_reward_progress()
+	_test_hires_art()
 	_test_synth_sounds()
 	_test_bgm()
 	_test_bgm_slots()
@@ -394,3 +397,86 @@ func _test_dash_only_players_and_bosses() -> void:
 		check(not Cards.hand_for(id).has("dash_right") and Cards.hand_for(id).has("right"), "%s 는 1칸 이동만" % id)
 	var r = Rules.new("sword", "slime")
 	check(not r.is_valid_selection(1, ["dash_left", "rest", "guard"]), "일반 몬스터는 2칸 이동 카드를 낼 수 없음")
+
+
+## 보상 카드가 전투 규칙에서 제대로 동작하는지: 손패에 더해짐, 치유, 철벽 방어, 복사본(AI 시뮬레이션) 유지.
+func _test_reward_cards_in_battle() -> void:
+	var r = Rules.new("sword", "slime")
+	check(not r.hand(0).has("heal"), "보상 전엔 치유 카드 없음")
+	r.fighters[0].extra.assign(["heal", "iron_guard", "sword_iai"])
+	check(r.hand(0).has("heal") and r.hand(0).has("sword_iai"), "얻은 카드가 손패에 더해짐")
+	check(r.clone().fighters[0].extra.size() == 3, "복사본도 얻은 카드 유지")
+	check(r.is_valid_selection(0, ["heal", "sword_iai", "right"]), "얻은 카드로 선택 가능")
+	r.fighters[0].hp = 50
+	var ev: Array = r.resolve_turn(["heal", "rest", "right"], ["rest", "guard", "up"])
+	check(r.fighters[0].hp == 75 and ev[0].healed[0] == 25 and ev[0].mp[0] == Rules.START_MP - 20, "치유: HP +25, MP 20 소모")
+	r.fighters[0].hp = r.fighters[0].max_hp - 5
+	r.resolve_turn(["heal", "rest", "right"], ["rest", "guard", "up"])
+	check(r.fighters[0].hp == r.fighters[0].max_hp, "치유는 최대 HP 를 넘지 않음")
+	r = _setup(Vector2i(1, 1), Vector2i(2, 1))
+	r.fighters[1].extra.assign(["iron_guard"])
+	ev = r.resolve_turn(["sword_slash", "rest", "guard"], ["iron_guard", "rest", "up"])
+	check(ev[0].hits[0].dmg == 0, "철벽 방어는 30까지 막음(베기 25 → 0)")
+
+
+## 보상 후보·적용·초기화.
+func _test_reward_progress() -> void:
+	var g = GameState.new()
+	g.player_char = "archer"
+	g.start_single()
+	var rng := RandomNumberGenerator.new()
+	for seed in 20:
+		rng.seed = seed
+		var opts: Array = g.reward_options(rng)
+		var ids := {}
+		var has_card := false
+		for o: Dictionary in opts:
+			ids[o.id] = true
+			has_card = has_card or o.kind == "card"
+			if o.kind == "card":
+				check(Cards.reward_cards_for("archer").has(o.id), "궁수 보상에 검사 기술이 섞이지 않음 (%s)" % o.id)
+		check(opts.size() == 3 and ids.size() == 3 and has_card, "후보 3개, 중복 없음, 카드 최소 1장 (seed %d)" % seed)
+	g.on_single_won(60)
+	g.take_reward({"kind": "card", "id": "archer_snipe"})
+	check(g.battle_config().extra_cards == ["archer_snipe"], "얻은 카드는 다음 전투로 이어짐")
+	rng.seed = 1
+	for o: Dictionary in g.reward_options(rng):
+		check(o.id != "archer_snipe", "이미 얻은 카드는 다시 안 나옴")
+	g.player_hp = 50
+	g.take_reward({"kind": "instant", "id": "training"})
+	check(g.player_max_hp() == 115 and g.player_hp == 65, "단련: 최대 HP +15, 그만큼 회복")
+	g.take_reward({"kind": "instant", "id": "first_aid"})
+	check(g.player_hp == 105, "응급 처치: HP +40")
+	g.start_single()
+	check(g.extra_cards.is_empty() and g.max_hp_bonus == 0, "처음부터 다시 하면 보상 초기화")
+	g.free()
+
+
+## 큰 그림은 부드럽게(밉맵 포함), 도트·임시 도트는 각지게. 배경 그림은 테마 이름으로 찾는다.
+func _test_hires_art() -> void:
+	check(not CharArt.is_smooth(CharArt.build_frames("sword")), "임시 도트는 각지게")
+	var dir := ProjectSettings.globalize_path("res://art/_hires")
+	DirAccess.make_dir_recursive_absolute(dir)
+	var img := Image.create(256, 128, false, Image.FORMAT_RGBA8)
+	img.fill(Color.RED)
+	img.save_png(dir + "/idle_2.png")
+	var frames: SpriteFrames = CharArt.build_frames("_hires")
+	check(CharArt.is_smooth(frames), "높이 128px 그림은 부드럽게")
+	check(frames.get_frame_texture("idle", 0).get_image().has_mipmaps(), "큰 그림은 밉맵 생성")
+	var cfg := ConfigFile.new()
+	cfg.set_value("art", "filter", "pixel")
+	cfg.save(dir + "/art.cfg")
+	check(not CharArt.is_smooth(CharArt.build_frames("_hires")), "art.cfg 로 도트 강제")
+	for f in ["idle_2.png", "art.cfg"]:
+		DirAccess.remove_absolute(dir + "/" + f)
+	DirAccess.remove_absolute(dir)
+
+	check(CharArt.background("_nope") == null, "배경 그림이 없으면 null")
+	var bg := ProjectSettings.globalize_path("res://art/bg")
+	var made_dir := not DirAccess.dir_exists_absolute(bg)
+	DirAccess.make_dir_recursive_absolute(bg)
+	img.save_png(bg + "/_testtheme.png")
+	check(CharArt.background("_testtheme") != null, "art/bg/<테마>.png 를 찾음")
+	DirAccess.remove_absolute(bg + "/_testtheme.png")
+	if made_dir:
+		DirAccess.remove_absolute(bg)

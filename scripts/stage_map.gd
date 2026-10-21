@@ -30,12 +30,17 @@ func _ready() -> void:
 	var title := "던전 클리어!" if Game.is_cleared() else "%d장 · %s" % [Game.chapter + 1, ch.name]
 	box.add_child(UiStyle.label(title, 44, GOLD))
 	var me := Game.player_char
-	var hp: int = Game.player_hp if Game.player_hp >= 0 else Game.max_hp(me)
+	var hp: int = Game.player_hp if Game.player_hp >= 0 else Game.player_max_hp()
 	var who := HBoxContainer.new()
 	who.alignment = BoxContainer.ALIGNMENT_CENTER
 	who.add_child(UiStyle.portrait(CharArt.build_frames(me), 1.5))
-	who.add_child(UiStyle.label("%s  HP %d / %d" % [Cards.CHARACTERS[me].name, hp, Game.max_hp(me)], 20))
+	who.add_child(UiStyle.label("%s  HP %d / %d" % [Cards.CHARACTERS[me].name, hp, Game.player_max_hp()], 20))
 	box.add_child(who)
+	if not Game.extra_cards.is_empty():
+		var names := PackedStringArray()
+		for id in Game.extra_cards:
+			names.append(Cards.get_card(id).name)
+		box.add_child(UiStyle.label("얻은 카드: " + ", ".join(names), 16, Color(0.95, 0.85, 0.5)))
 
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
