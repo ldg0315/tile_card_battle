@@ -10,6 +10,8 @@ const GameState := preload("res://scripts/game_state.gd")
 const BossPlan := preload("res://scripts/boss_plan.gd")
 const Cards := preload("res://scripts/cards.gd")
 const Themes := preload("res://scripts/themes.gd")
+const Synth := preload("res://scripts/sfx_synth.gd")
+const BgmSynth := preload("res://scripts/bgm_synth.gd")
 
 var failed := 0
 
@@ -35,6 +37,8 @@ func _init() -> void:
 	_test_multi_enemy()
 	_test_mp_regen()
 	_test_dash()
+	_test_synth_sounds()
+	_test_bgm()
 	_test_ai_fixed_slots()
 	_test_boss_pattern()
 	print("ALL PASSED" if failed == 0 else "FAILED: %d" % failed)
@@ -57,24 +61,29 @@ func _setup(p0: Vector2i, p1: Vector2i):
 
 func _test_forward_is_toward_opponent() -> void:
 	var r = Rules.new()
-	r.resolve_turn(["fwd", "rest", "guard"], ["fwd", "rest", "guard"])
-	check(r.fighters[0].pos == Vector2i(1, 1), "P1 앞으로 = 열 +1")
-	check(r.fighters[1].pos == Vector2i(2, 1), "P2 앞으로 = 열 -1")
+	r.resolve_turn(["right", "rest", "guard"], ["left", "rest", "guard"])
+	check(r.fighters[0].pos == Vector2i(1, 1), "오른쪽 = 열 +1")
+	check(r.fighters[1].pos == Vector2i(2, 1), "왼쪽 = 열 -1")
+	# 이동은 바라보는 방향과 무관 — 왼쪽을 보고 있어도 "오른쪽"은 오른쪽
+	r = _setup(Vector2i(2, 0), Vector2i(0, 1))
+	check(r.fighters[0].facing == -1, "(준비) 왼쪽을 바라봄")
+	r.resolve_turn(["right", "rest", "guard"], ["rest", "guard", "up"])
+	check(r.fighters[0].pos == Vector2i(3, 0), "이동은 화면 기준")
 
 
 func _test_wall_blocks_move() -> void:
 	var r = Rules.new()
-	r.resolve_turn(["up", "up", "rest"], ["back", "down", "down"])
+	r.resolve_turn(["up", "up", "rest"], ["right", "down", "down"])
 	check(r.fighters[0].pos == Vector2i(0, 0), "보드 밖으로는 못 나감(위)")
 	check(r.fighters[1].pos == Vector2i(3, 2), "보드 밖으로는 못 나감(뒤·아래)")
 
 
 func _test_same_tile_and_swap_blocked() -> void:
 	var r = _setup(Vector2i(0, 1), Vector2i(2, 1))
-	r.resolve_turn(["fwd", "rest", "guard"], ["fwd", "rest", "guard"])
+	r.resolve_turn(["right", "rest", "guard"], ["left", "rest", "guard"])
 	check(r.fighters[0].pos == Vector2i(0, 1) and r.fighters[1].pos == Vector2i(2, 1), "같은 칸 진입은 둘 다 제자리")
 	r = _setup(Vector2i(1, 1), Vector2i(2, 1))
-	r.resolve_turn(["fwd", "rest", "guard"], ["fwd", "rest", "guard"])
+	r.resolve_turn(["right", "rest", "guard"], ["left", "rest", "guard"])
 	check(r.fighters[0].pos == Vector2i(1, 1) and r.fighters[1].pos == Vector2i(2, 1), "자리 맞바꾸기는 둘 다 제자리")
 
 
@@ -91,7 +100,7 @@ func _test_attack_and_guard() -> void:
 
 func _test_facing_flips_after_passing() -> void:
 	var r = _setup(Vector2i(1, 0), Vector2i(2, 1))
-	r.resolve_turn(["fwd", "fwd", "rest"], ["rest", "rest", "rest"])
+	r.resolve_turn(["right", "dash_right", "rest"], ["rest", "rest", "rest"])
 	check(r.fighters[0].pos == Vector2i(3, 0), "상대 옆을 지나 이동")
 	check(r.fighters[0].facing == -1 and r.fighters[1].facing == 1, "턴이 끝나면 서로 돌아섬")
 
@@ -99,7 +108,7 @@ func _test_facing_flips_after_passing() -> void:
 ## 이동한 쪽은 바로 돌아서고, 가만히 있던 쪽은 방향을 유지한다 — 그래서 지나친 상대에게 등을 내준다.
 func _test_facing_locked_during_turn() -> void:
 	var r = _setup(Vector2i(1, 0), Vector2i(2, 1))
-	var ev: Array = r.resolve_turn(["fwd", "fwd", "rest"], ["rest", "rest", "rest"])
+	var ev: Array = r.resolve_turn(["right", "dash_right", "rest"], ["rest", "rest", "rest"])
 	check(ev[0].facing[0] == 1, "같은 열로 오면 방향 유지")
 	check(ev[1].facing[0] == -1, "상대를 지나친 이동 직후 돌아섬")
 	check(ev[1].facing[1] == -1, "가만히 있던 쪽은 방향 유지(등을 내줌)")
@@ -109,7 +118,7 @@ func _test_facing_locked_during_turn() -> void:
 ## 2칸 이동으로 넘어가 바로 베면 뒤잡기.
 func _test_dash_backstab() -> void:
 	var r = _setup(Vector2i(1, 1), Vector2i(2, 1))
-	var ev: Array = r.resolve_turn(["dash_fwd", "sword_slash", "guard"], ["rest", "guard", "rest"])
+	var ev: Array = r.resolve_turn(["dash_right", "sword_slash", "guard"], ["rest", "guard", "rest"])
 	check(ev[0].facing[0] == -1, "넘어가자마자 상대를 향해 돌아섬")
 	check(ev[1].hits[0].back and ev[1].hits[0].dmg == int(25 * Rules.BACKSTAB_MULT), "넘어가서 벤 일반 베기가 뒤잡기, 방어도 무시")
 
@@ -143,11 +152,11 @@ func _test_simultaneous_ko_is_draw() -> void:
 
 func _test_selection_rules() -> void:
 	var r = Rules.new()
-	check(r.is_valid_selection(0, ["fwd", "sword_slash", "guard"]), "정상 선택")
-	check(not r.is_valid_selection(0, ["fwd", "fwd", "guard"]), "중복 카드 금지")
+	check(r.is_valid_selection(0, ["right", "sword_slash", "guard"]), "정상 선택")
+	check(not r.is_valid_selection(0, ["right", "right", "guard"]), "중복 카드 금지")
 	r.fighters[0].mp = 50
-	check(not r.is_valid_selection(0, ["sword_thrust", "sword_spin", "fwd"]), "MP 초과 금지 (30+25 > 50)")
-	check(not r.is_valid_selection(0, ["archer_arrow", "fwd", "guard"]), "상대 캐릭터 카드 금지")
+	check(not r.is_valid_selection(0, ["sword_thrust", "sword_spin", "right"]), "MP 초과 금지 (30+25 > 50)")
+	check(not r.is_valid_selection(0, ["archer_arrow", "right", "guard"]), "상대 캐릭터 카드 금지")
 
 
 func _test_ai_always_valid() -> void:
@@ -298,7 +307,7 @@ func _test_multi_enemy() -> void:
 	r.fighters[1].hp = 1
 	r.fighters[0].pos = Vector2i(2, 0)
 	r.fighters[0].facing = 1
-	ev = r.resolve_turn([["sword_slash", "rest", "guard"], ["rest", "rest", "rest"], ["fwd", "rest", "rest"]])
+	ev = r.resolve_turn([["sword_slash", "rest", "guard"], ["rest", "rest", "rest"], ["left", "rest", "rest"]])
 	check(ev[0].died == [1] and r.winner == -1, "하나만 쓰러지면 계속")
 	check(ev[1].cards[1] == "", "쓰러진 적은 남은 카드를 내지 않음")
 	# 같은 칸 진입 충돌은 셋 이상이어도 관련된 쪽 모두 제자리
@@ -310,7 +319,7 @@ func _test_multi_enemy() -> void:
 
 func _test_mp_regen() -> void:
 	var r = Rules.new()
-	r.resolve_turn(["fwd", "sword_slash", "guard"], ["rest", "guard", "back"])
+	r.resolve_turn(["right", "sword_slash", "guard"], ["rest", "guard", "right"])
 	check(r.fighters[0].mp == Rules.START_MP - 15 + Rules.MP_REGEN, "턴이 끝나면 MP 회복")
 	check(r.fighters[1].mp == mini(Rules.MAX_MP, Rules.START_MP + Rules.REST_MP + Rules.MP_REGEN), "회복은 최대치까지")
 
@@ -318,16 +327,46 @@ func _test_mp_regen() -> void:
 ## 2칸 이동: 비용 5, 중간의 적은 뛰어넘고, 벽 앞에선 갈 수 있는 만큼만.
 func _test_dash() -> void:
 	var r = Rules.new()
-	var ev: Array = r.resolve_turn(["dash_fwd", "rest", "guard"], ["rest", "guard", "back"])
-	check(r.fighters[0].pos == Vector2i(2, 1), "앞 2칸")
+	var ev: Array = r.resolve_turn(["dash_right", "rest", "guard"], ["rest", "guard", "right"])
+	check(r.fighters[0].pos == Vector2i(2, 1), "오른쪽 2칸")
 	check(ev[0].mp[0] == Rules.START_MP - 5, "2칸 이동은 MP 5 소모")
 	r = _setup(Vector2i(1, 1), Vector2i(2, 1))
-	r.resolve_turn(["dash_fwd", "rest", "guard"], ["rest", "guard", "rest"])
+	r.resolve_turn(["dash_right", "rest", "guard"], ["rest", "guard", "rest"])
 	check(r.fighters[0].pos == Vector2i(3, 1), "가운데 적을 뛰어넘음")
 	check(r.fighters[0].facing == -1, "넘어가면 턴 끝에 돌아섬")
 	r = _setup(Vector2i(0, 1), Vector2i(3, 1))
 	r.resolve_turn(["dash_up", "rest", "guard"], ["rest", "guard", "rest"])
 	check(r.fighters[0].pos == Vector2i(0, 0), "위가 1칸뿐이면 1칸만")
 	r = _setup(Vector2i(1, 1), Vector2i(3, 1))
-	r.resolve_turn(["dash_fwd", "rest", "guard"], ["rest", "guard", "rest"])
+	r.resolve_turn(["dash_right", "rest", "guard"], ["rest", "guard", "rest"])
 	check(r.fighters[0].pos == Vector2i(1, 1), "도착 칸에 적이 있으면 제자리")
+
+
+## 임시 효과음이 모두 만들어지고, 소리가 실제로 있으며(무음 아님), 찢어지지 않는지.
+func _test_synth_sounds() -> void:
+	for name: String in Synth.PRESETS:
+		var s: AudioStreamWAV = Synth.make(name)
+		var n: int = s.data.size() / 2
+		var peak := 0
+		for i in n:
+			peak = maxi(peak, absi(s.data.decode_s16(i * 2)))
+		check(n > 0 and peak > 1000, "%s: 소리가 남" % name)
+		check(peak < 32767, "%s: 최대 음량 이하(클리핑 없음)" % name)
+
+
+## 임시 배경음악: 마디 단위로 딱 떨어지는 길이(끊김 없는 반복), 반복 설정, 찢어짐 없음, 멜로디가 마디 수와 맞음.
+func _test_bgm() -> void:
+	for name: String in BgmSynth.SONGS:
+		var song: Dictionary = BgmSynth.SONGS[name]
+		var eighths := 0
+		for n: Array in song.melody:
+			eighths += n[1]
+		check(eighths == song.chords.size() * 8, "%s: 멜로디 길이가 마디 수와 맞음 (%d/%d)" % [name, eighths, song.chords.size() * 8])
+		var s: AudioStreamWAV = BgmSynth.make(name)
+		var frames: int = s.data.size() / 2
+		var expect := int(song.chords.size() * 8 * (60.0 / song.bpm / 2.0) * BgmSynth.RATE)
+		check(frames == expect and s.loop_mode == AudioStreamWAV.LOOP_FORWARD and s.loop_end == frames, "%s: 반복 재생 설정" % name)
+		var peak := 0
+		for i in range(0, frames, 7):
+			peak = maxi(peak, absi(s.data.decode_s16(i * 2)))
+		check(peak > 3000 and peak < 32767, "%s: 소리가 있고 찢어지지 않음 (peak %d)" % [name, peak])

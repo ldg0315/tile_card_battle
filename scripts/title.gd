@@ -9,6 +9,7 @@ func _ready() -> void:
 	if Game.handle_skip_args():
 		return
 	Game.mode = ""
+	Sound.play_bgm("title")
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	UiStyle.background(self)
 
@@ -47,6 +48,7 @@ func _menu_button(parent: Control, text: String, accent: Color, action: Callable
 	b.custom_minimum_size = Vector2(320, 52)
 	b.add_theme_font_size_override("font_size", 22)
 	UiStyle.style_button(b, accent)
+	b.pressed.connect(Sound.play.bind("click"))
 	b.pressed.connect(action)
 	parent.add_child(b)
 	return b

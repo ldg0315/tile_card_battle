@@ -16,6 +16,7 @@ func _ready() -> void:
 	if Game.mode == "":
 		Game.mode = "single"  # F6 으로 바로 열었을 때
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	Sound.play_bgm("title")
 	UiStyle.background(self)
 
 	var box := VBoxContainer.new()
@@ -39,6 +40,7 @@ func _ready() -> void:
 	back.custom_minimum_size = Vector2(160, 40)
 	back.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	UiStyle.style_button(back, Color(0.6, 0.6, 0.65))
+	back.pressed.connect(Sound.play.bind("click"))
 	back.pressed.connect(Game.goto_title)
 	box.add_child(back)
 
@@ -66,6 +68,7 @@ func _char_card(id: String) -> Control:
 	pick.custom_minimum_size = Vector2(0, 44)
 	pick.add_theme_font_size_override("font_size", 20)
 	UiStyle.style_button(pick, accent)
+	pick.pressed.connect(Sound.play.bind("click"))
 	pick.pressed.connect(Game.choose_character.bind(id))
 	v.add_child(pick)
 	return card

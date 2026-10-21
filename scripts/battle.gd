@@ -13,6 +13,7 @@ const Themes := preload("res://scripts/themes.gd")
 const PropArt := preload("res://scripts/prop_art.gd")
 const PixelArt := preload("res://scripts/pixel_art.gd")
 const SlashShader := preload("res://shaders/slash_ring.gdshader")
+const Minimap := preload("res://scripts/minimap.gd")
 
 const TILE := 2.0
 const SPRITE_PX := 0.09  # 발사체 도트 크기
@@ -40,6 +41,8 @@ const CARD_ACCENT := {
 const FP_SPIN_CAMERA := true
 const SPIN_TIME := 0.45
 const ORDER_MARK := ["①", "②", "③"]
+const ATTACK_SFX := {"lunge": "slash", "thrust": "thrust", "spin": "spin", "jump": "jump",
+	"arrow": "arrow", "volley": "volley", "wave": "wave"}
 const DEATH_HOLD := 0.9  # 쓰러진 모습을 보여주는 시간. 바로 사라지면 무엇이 쓰러졌는지 놓친다
 const DEATH_FADE := 0.7
 
@@ -61,6 +64,9 @@ var fp_spin := 0.0  # 1인칭 회전베기 중 카메라가 더 돌아간 각도
 # 적을 본 채로 찌르면 빗나가는 공격도 맞는 것처럼 보여서 착각을 부른다
 var fp_face_lock := false
 var first_person := false
+var overview := false  # Space 를 누르는 동안 1인칭에서 잠깐 3인칭으로
+var minimap_always := false  # M: 3인칭에서도 미니맵 표시
+var preview_tiles: Array[Vector2i] = []  # 마우스를 올린 카드의 범위(미니맵도 같이 그린다)
 var fp_target := 1  # 1인칭 카메라가 바라보는 적
 var enemy_plans := {}  # 적 번호 → 이번 턴 카드. 엿보기를 하려면 내가 고르기 전에 정해져 있어야 한다
 var boss_states := {}  # 적 번호 → 패턴 보스의 진행(페이즈·턴)
@@ -101,6 +107,7 @@ var hurt_flash: ColorRect
 var compass_label: Label
 var fp_act_label: Label
 var viewmodel: TextureRect  # 1인칭에서 화면 오른쪽 아래에 보이는 내 무기
+var minimap: Control
 var vm_offset := Vector2.ZERO  # 무기 휘두르기 트윈은 이 값을 움직인다(위치는 매 프레임 흔들림과 합쳐 다시 계산되므로)
 
 
@@ -111,6 +118,8 @@ func _ready() -> void:
 		if a.begins_with("--theme="):
 			theme_id = a.substr(8)  # 개발용: 아직 스테이지가 없는 테마(해안가 등) 배경 확인
 	theme = Themes.get_theme(theme_id)
+	# 배경음악: 보스 스테이지면 보스곡, 아니면 장 테마 곡(audio/bgm/forest.ogg 등). 파일이 없으면 무음
+	Sound.play_bgm("boss" if Game.current_stage().get("boss", false) else theme_id)
 	_build_world()
 	_build_scenery()
 	_build_ui()
@@ -423,6 +432,12 @@ func _build_ui() -> void:
 	compass_label.offset_top = -200
 	compass_label.offset_bottom = -170
 	fp_act_label = _overlay_label(root, 300, Color(1, 1, 1))
+	minimap = Minimap.new()
+	minimap.battle = self
+	minimap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	minimap.position = Vector2(24, 96)
+	minimap.hide()
+	root.add_child(minimap)
 	fp_act_label.add_theme_font_size_override("font_size", 30)
 
 	var top := HBoxContainer.new()
@@ -590,7 +605,7 @@ func _build_hand() -> void:
 		_style_button(b, CARD_ACCENT[card.type])
 		b.pressed.connect(_on_card_pressed.bind(id))
 		b.mouse_entered.connect(_preview.bind(id))
-		b.mouse_exited.connect(_clear_tiles)
+		b.mouse_exited.connect(_end_preview)
 		if card.type == "move":
 			b.custom_minimum_size = Vector2(96, 35)
 			b.add_theme_font_size_override("font_size", 14)
@@ -666,8 +681,9 @@ func _new_game() -> void:
 		_log("[b]%s · %s[/b]%s%s — %s 등장!\n" % [Game.stage_code(Game.chapter, Game.stage), st.name, wave_txt,
 			" (보스)" if st.get("boss", false) else "", ", ".join(names)])
 	_log("카드 3장을 순서대로 고르고 [b]실행[/b]을 누르세요.\n카드에 마우스를 올리면 범위가 노랗게 보입니다.")
-	_log("등 뒤를 치면 [b]뒤잡기[/b](피해 x%.1f), 방어는 정면만 막습니다. 이동하면 가장 가까운 적을 향해 돌아서고(발밑 화살표), MP 는 턴마다 %d 회복합니다." % [Rules.BACKSTAB_MULT, Rules.MP_REGEN])
+	_log("등 뒤를 치면 [b]뒤잡기[/b](피해 x%.1f), 방어는 정면만 막습니다. 이동 카드는 화면 기준(←→↑↓)이고, 이동하면 가장 가까운 적을 향해 돌아섭니다(발밑 화살표). 공격은 바라보는 쪽으로 나갑니다. MP 는 턴마다 %d 회복합니다." % [Rules.BACKSTAB_MULT, Rules.MP_REGEN])
 	_log("[b]V[/b]: 1인칭(적이 여럿이면 [b]Tab[/b]으로 볼 적 전환). 바라보는 적이 2칸 이내면 카드를 엿볼 수 있습니다.")
+	_log("1인칭에선 왼쪽 위 [b]미니맵[/b]에 고른 카드의 예상 경로가 나옵니다. [b]Space[/b]를 누르는 동안 3인칭, [b]M[/b]은 미니맵 켜기·끄기.")
 	result_panel.hide()
 	_show_current_stats()
 	boss_states.clear()
@@ -742,6 +758,7 @@ func _on_card_pressed(id: String) -> void:
 		return
 	if selected.has(id):
 		selected.erase(id)
+		Sound.play("deselect")
 		_refresh_hand()
 		return
 	if selected.size() >= Rules.CARDS_PER_TURN:
@@ -749,6 +766,7 @@ func _on_card_pressed(id: String) -> void:
 	if rules.cost_of(selected + [id]) > rules.fighters[0].mp:
 		return
 	selected.append(id)
+	Sound.play("select")
 	_refresh_hand()
 
 
@@ -756,6 +774,7 @@ func _on_go() -> void:
 	if busy or not rules.is_valid_selection(0, selected):
 		return
 	busy = true
+	Sound.play("go")
 	turn += 1
 	var plans := [selected.duplicate()]
 	for i in range(1, rules.fighters.size()):
@@ -798,12 +817,14 @@ func _plan_enemies() -> void:
 				_log("[color=#ff7a5c]⚠ %s[/color]" % plan.warn)
 				warn_label.text = "⚠ " + plan.warn
 				warn_label.show()
+				Sound.play("warn")
 		else:
 			enemy_plans[i] = AI.choose(rules, i, rng)
 	_update_peek()
 
 
 func _show_result() -> void:
+	Sound.play("victory" if rules.winner == 0 else "defeat")
 	match rules.winner:
 		0:
 			result_label.text = "승리!"
@@ -839,6 +860,7 @@ func _result_button(text: String, accent: Color, action: Callable) -> void:
 	b.text = text
 	b.custom_minimum_size = Vector2(150, 40)
 	_style_button(b, accent)
+	b.pressed.connect(Sound.play.bind("click"))
 	b.pressed.connect(action)
 	result_buttons.add_child(b)
 
@@ -848,9 +870,18 @@ func _result_button(text: String, accent: Color, action: Callable) -> void:
 ## _unhandled_input 이 아니라 _input 에서 받는다 — Tab 은 GUI 가 "다음 버튼으로 포커스 이동"으로 먼저 써버려서
 ## _unhandled_input 까지 오지 않는다(버튼 하이라이트만 옮겨 다니던 증상).
 func _input(event: InputEvent) -> void:
-	if not (event is InputEventKey and event.pressed and not event.echo):
+	if not (event is InputEventKey and not event.echo):
 		return
-	if event.keycode == KEY_V:
+	if event.keycode == KEY_SPACE:
+		_set_overview(event.pressed and first_person)
+		get_viewport().set_input_as_handled()
+		return
+	if not event.pressed:
+		return
+	if event.keycode == KEY_M:
+		minimap_always = not minimap_always
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_V:
 		_toggle_view()
 		get_viewport().set_input_as_handled()
 	elif event.keycode == KEY_TAB:
@@ -872,6 +903,13 @@ func _toggle_view() -> void:
 		for m in offscreen_marks:
 			m.hide()
 	_update_peek()
+
+
+## Space 를 누르는 동안만 3인칭으로 판 전체를 본다. 떼면 1인칭으로 돌아온다.
+func _set_overview(on: bool) -> void:
+	overview = on
+	sprites[0].visible = (not first_person or overview) and not gone[0]
+	viewmodel.visible = first_person and not overview
 
 
 func _nearest_enemy() -> int:
@@ -906,14 +944,23 @@ func _fit_label(l: Label3D) -> void:
 ## 카메라는 매 프레임 목표 시점으로 부드럽게 따라간다. 전환 트윈을 따로 두지 않아도
 ## 1인칭에서 캐릭터가 점프·돌진할 때 눈높이가 자연스럽게 따라붙고, 바라보는 적이 바뀌면 고개가 돌아간다.
 func _process(delta: float) -> void:
-	var target := _fp_xform() if first_person else tp_xform
+	var fp := first_person and not overview
+	var target := _fp_xform() if fp else tp_xform
 	var k := 1.0 - exp(-delta * 8.0)
 	# 회전베기 중엔 보간 없이 바로 따른다 — 보간하면 180도를 넘는 순간 반대쪽(짧은 쪽)으로 되감긴다
 	cam_smooth = target if fp_spin != 0.0 else cam_smooth.interpolate_with(target, k)
 	cam.global_transform = Transform3D(cam_smooth.basis, cam_smooth.origin + shake_off)
-	cam.fov = lerpf(cam.fov, FP_FOV if first_person else TP_FOV, k) + fov_kick
-	if first_person:
+	cam.fov = lerpf(cam.fov, FP_FOV if fp else TP_FOV, k) + fov_kick
+	if fp:
 		_update_fp_hud()
+	# Space 로 잠깐 3인칭을 보는 동안엔 1인칭 전용 표시(나침반·화면 밖 표시)를 숨긴다
+	compass_label.visible = fp
+	if not fp:
+		for m in offscreen_marks:
+			m.hide()
+	minimap.visible = first_person or minimap_always
+	if minimap.visible:
+		minimap.queue_redraw()
 
 
 ## 눈은 내 위치, 시선은 바라보는 적. 적이 옆이나 뒤에 있어도 화면에서 놓치지 않게 고개를 돌린다.
@@ -936,12 +983,13 @@ func _fp_xform() -> Transform3D:
 func _update_fp_hud() -> void:
 	var fwd := -cam.global_basis.z
 	var right := cam.global_basis.x
-	var face := Vector3(step_facing[0], 0, 0)
-	var d_front := face.dot(Vector3(fwd.x, 0, fwd.z).normalized())
-	var d_right := face.dot(Vector3(right.x, 0, right.z).normalized())
-	var arrow := "▲" if d_front > 0.7 else ("▼" if d_front < -0.7 else ("▶" if d_right > 0 else "◀"))
+	var flat_fwd := Vector3(fwd.x, 0, fwd.z).normalized()
+	var flat_right := Vector3(right.x, 0, right.z).normalized()
 	var hint := "   [Tab] 볼 적 바꾸기" if rules.foes_of(0).size() > 1 else ""
-	compass_label.text = "내 정면(카드의 앞) %s%s" % [arrow, hint]
+	# 1인칭에선 고개를 돌리니 화면 기준 이동 카드(→)가 지금 어느 쪽인지도 같이 알려준다
+	compass_label.text = "공격 방향(내 정면) %s   → 카드는 %s%s" % [
+		_screen_arrow(Vector3(step_facing[0], 0, 0), flat_fwd, flat_right),
+		_screen_arrow(Vector3.RIGHT, flat_fwd, flat_right), hint]
 
 	var view := get_viewport().get_visible_rect().size
 	var area := ui_root.size
@@ -976,6 +1024,16 @@ func _update_fp_hud() -> void:
 	# 무기는 전투 기록 패널 왼쪽 아래에 두고, 숨 쉬듯 살짝 흔든다
 	var t_now := Time.get_ticks_msec() / 1000.0
 	viewmodel.position = Vector2(area.x - 270 - 290, area.y - 300) + vm_offset + Vector2(0, sin(t_now * 2.2) * 4.0)
+
+
+## 월드 방향 v 가 지금 카메라 기준으로 앞(▲)·뒤(▼)·오른쪽(▶)·왼쪽(◀) 중 어디인지.
+func _screen_arrow(v: Vector3, fwd: Vector3, right: Vector3) -> String:
+	var f := v.dot(fwd)
+	if f > 0.7:
+		return "▲"
+	if f < -0.7:
+		return "▼"
+	return "▶" if v.dot(right) > 0 else "◀"
 
 
 ## 엿보기는 지금 바라보는 적에게만. 가까울수록 많이 보인다.
@@ -1114,8 +1172,14 @@ func _play_step(ev: Dictionary) -> void:
 			var dist := sprites[i].position.distance_to(step_pos[i]) / TILE
 			# 보던 방향의 반대로 가면 뒷걸음질(걷기 동작을 거꾸로)
 			var old_f := -1 if sprites[i].flip_h else 1
-			var backward := moved and (step_pos[i].x - sprites[i].position.x) * old_f < -0.01
-			_hop(i, step_pos[i], 0.35 + 0.35 * dist if moved else 0.2, backward)
+			if moved:
+				var backward := (step_pos[i].x - sprites[i].position.x) * old_f < -0.01
+				_hop(i, step_pos[i], 0.35 + 0.35 * dist, backward)
+			elif not ev.fizzled[i]:
+				# 벽이나 다른 전투원에 막혀 제자리 — 이유 없이 안 움직인 것처럼 보이지 않게 "막힘"과 부딪히는 동작
+				card_tags[i].text = cards[i].name + " (막힘)"
+				var d: Vector2i = cards[i].dir
+				_bump(i, Vector3(signi(d.x), 0, signi(d.y)))  # 이동은 화면 기준이라 바라보는 방향과 무관
 			await _wait(MOVE_TIME + 0.15)
 			# 규칙상 이동한 쪽은 착지하자마자 가장 가까운 적을 향해 돈다
 			sprites[i].flip_h = step_facing[i] < 0
@@ -1128,6 +1192,7 @@ func _play_step(ev: Dictionary) -> void:
 		var type: String = cards[i].get("type", "")
 		if type == "guard" or type == "rest":
 			_show_tag(i, cards[i])
+			Sound.play_at(type, step_pos[i], -2.0)  # "guard" / "rest"
 			if type == "guard":
 				sprites[i].modulate = Color(0.6, 0.8, 1.0)
 				sprites[i].play("guard")
@@ -1167,6 +1232,7 @@ func _play_death(i: int) -> void:
 	s.position = step_pos[i]
 	s.modulate = Color.WHITE
 	s.play("die")
+	Sound.play_at("death", step_pos[i])
 	_log("[color=#c8c8c8]%s[/color]" % ("쓰러졌다…" if i == 0 else "%s 처치!" % _who(i)))
 	var tw := _tween()
 	tw.tween_interval(DEATH_HOLD)
@@ -1242,10 +1308,23 @@ func _hop(i: int, to: Vector3, height: float, backward := false) -> void:
 		s.play_backwards("walk")
 	else:
 		s.play("walk")
+	if height > 0.75:
+		Sound.play_at("dash", from)  # 2칸 이동은 바람 가르는 소리로 시작
 	var tw := _motion(i)
 	tw.tween_method(func(t: float) -> void:
 		s.position = from.lerp(to, t) + Vector3(0, sin(t * PI) * height, 0), 0.0, 1.0, MOVE_TIME)
 	tw.tween_callback(s.play.bind("idle"))
+	tw.tween_callback(Sound.play_at.bind("move", to, -4.0))
+
+
+## 가려던 쪽으로 살짝 나갔다가 튕겨 돌아온다(이동이 막혔을 때).
+func _bump(i: int, dir: Vector3) -> void:
+	var s := sprites[i]
+	var base := step_pos[i]
+	var tw := _motion(i)
+	tw.tween_property(s, "position", base + dir * 0.35, 0.1).set_ease(Tween.EASE_OUT)
+	tw.tween_property(s, "position", base, 0.15).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	Sound.play_at("block", base, -8.0)
 
 
 ## 공격·피격처럼 한 번만 재생하는 동작이 끝나면 대기로 돌아간다(쓰러짐은 마지막 프레임에 멈춘다).
@@ -1256,7 +1335,9 @@ func _on_anim_finished(i: int) -> void:
 
 ## 공격 연출을 시작하고, 공격이 닿기까지 걸리는 시간을 돌려준다(이 시간 뒤에 피격 반응).
 func _attack_anim(i: int, card: Dictionary, h: Dictionary) -> float:
-	match card.get("anim", "lunge"):
+	var anim: String = card.get("anim", "lunge")
+	Sound.play_at(ATTACK_SFX.get(anim, "slash"), step_pos[i])
+	match anim:
 		"thrust":
 			return _lunge(i, 0.7)
 		"spin":
@@ -1290,6 +1371,7 @@ func _jump_slam(i: int) -> float:
 	tw.tween_interval(0.12)
 	tw.tween_property(s, "position", base, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	tw.tween_callback(_shake.bind(0.4))
+	tw.tween_callback(Sound.play_at.bind("slam", base))
 	return 0.54
 
 
@@ -1543,6 +1625,7 @@ func _shoot_arrow(i: int, h: Dictionary) -> float:
 	tw.tween_callback(trail.hide)
 	if stuck:
 		tw.tween_callback(_dust.bind(end))
+		tw.tween_callback(Sound.play_at.bind("arrow_hit", end, -4.0))
 		tw.tween_interval(1.0)
 		tw.tween_property(a, "scale", Vector3.ZERO, 0.25)
 	tw.tween_callback(a.queue_free)
@@ -1613,6 +1696,7 @@ func _volley(i: int, h: Dictionary) -> float:
 			tw.tween_callback(a.show)
 			tw.tween_property(a, "position", land, FALL).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 			tw.tween_callback(_dust.bind(land))
+			tw.tween_callback(Sound.play_at.bind("arrow_hit", land, -10.0, 0.15))
 			tw.tween_interval(0.8)
 			tw.tween_property(a, "scale", Vector3.ZERO, 0.2)
 			tw.tween_callback(a.queue_free)
@@ -1643,6 +1727,7 @@ func _recoil(i: int) -> void:
 
 ## 피해 숫자 + 공격자 반대쪽으로 밀림 + 화면 흔들림(피해가 클수록 세게).
 func _on_hit(target: int, attacker: int, dmg: int, back: bool) -> void:
+	Sound.play_at("block" if dmg <= 0 else ("backstab" if back else "hit"), step_pos[target])
 	if first_person and target == 0:
 		hurt_flash.color.a = 0.4 if back else 0.28
 		_tween().tween_property(hurt_flash, "color:a", 0.0, 0.45)
@@ -1698,21 +1783,80 @@ func _damage_popup(target: int, dmg: int, back := false) -> void:
 		_tween().tween_property(s, "modulate", Color.WHITE, 0.4)
 
 
+## 카드에 마우스를 올리면 범위/도착 칸을 보여준다. 기준은 지금 자리가 아니라 "앞서 고른 카드를 다 쓴 뒤의 자리"
+## — ①→2칸 을 고르고 ②베기 를 보면, 이동한 자리에서의 베기 범위가 보여야 계획을 세울 수 있다.
+## (이미 고른 카드에 올리면 그 카드 직전 자리 기준)
 func _preview(id: String) -> void:
 	if busy:
 		return
 	_clear_tiles()
-	var f = rules.fighters[0]
+	var order := selected.find(id)
+	var f = _planned_fighter(order if order != -1 else selected.size())
 	var card: Dictionary = Cards.get_card(id)
-	var tiles: Array = []
+	preview_tiles.clear()
 	if card.type == "attack":
-		tiles = rules.attack_tiles(f, card)
+		preview_tiles.assign(rules.attack_tiles(f, card))
 	elif card.type == "move":
 		var t: Vector2i = Rules.move_target(f, card.dir)
 		if t != f.pos:
-			tiles = [t]
-	for t: Vector2i in tiles:
+			preview_tiles = [t]
+	for t: Vector2i in preview_tiles:
 		tile_mats[t].albedo_color = PREVIEW_COLOR
+
+
+func _end_preview() -> void:
+	preview_tiles.clear()
+	_clear_tiles()
+
+
+## 고른 카드 앞에서부터 count 장을 썼을 때의 내 상태(위치·방향). 다른 전투원은 제자리라고 가정한다
+## — 상대 카드는 모르니 계획용 근사. 이동 후엔 규칙대로 가장 가까운 적을 향해 돈다.
+func _planned_fighter(count: int):
+	var me = rules.fighters[0].copy()
+	for k in mini(count, selected.size()):
+		var card: Dictionary = Cards.get_card(selected[k])
+		if card.type != "move":
+			continue
+		var t: Vector2i = Rules.move_target(me, card.dir)
+		var blocked := false
+		for j in rules.foes_of(0):
+			blocked = blocked or rules.fighters[j].pos == t
+		if not blocked:
+			me.pos = t
+			_face_nearest_plan(me)
+	return me
+
+
+func _face_nearest_plan(me) -> void:
+	var best := 99
+	for j in rules.foes_of(0):
+		var p: Vector2i = rules.fighters[j].pos
+		var d: int = absi(p.x - me.pos.x) + absi(p.y - me.pos.y)
+		if d < best and p.x != me.pos.x:
+			best = d
+			me.facing = signi(p.x - me.pos.x)
+
+
+## 미니맵용 예상 경로: 고른 카드마다 그 뒤의 자리·방향, 공격 카드면 그 자리에서의 범위.
+func planned_path() -> Array:
+	var out := []
+	if busy:
+		return out
+	for k in selected.size():
+		var card: Dictionary = Cards.get_card(selected[k])
+		var me = _planned_fighter(k + 1)
+		var step := {"order": k, "pos": me.pos}
+		if card.type == "attack":
+			step.tiles = rules.attack_tiles(_planned_fighter(k), card)
+		out.append(step)
+	return out
+
+
+## 스프라이트가 지금 서 있는(또는 지나가는) 칸. 연출 중에도 미니맵이 실제 움직임을 따라가게.
+func sprite_tile(i: int) -> Vector2i:
+	var p := sprites[i].position
+	return Vector2i(clampi(roundi(p.x / TILE + (Rules.COLS - 1) / 2.0), 0, Rules.COLS - 1),
+		clampi(roundi(p.z / TILE + (Rules.ROWS - 1) / 2.0), 0, Rules.ROWS - 1))
 
 
 func _clear_tiles() -> void:
@@ -1760,7 +1904,7 @@ func _handle_debug_args() -> void:
 	var shot := ""
 	var auto := false
 	var hand: Array = rules.hand(0)
-	var mine: Array = ["fwd", hand[Cards.COMMON.size()], "guard"]  # 앞으로 + 첫 공격 + 방어 (캐릭터와 무관하게 유효)
+	var mine: Array = ["right", hand[Cards.COMMON.size()], "guard"]  # 오른쪽 + 첫 공격 + 방어 (캐릭터와 무관하게 유효)
 	var mids: Array[float] = [0.75]
 	var n: int = rules.fighters.size()
 	for a in OS.get_cmdline_user_args():

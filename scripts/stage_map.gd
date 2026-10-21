@@ -16,6 +16,7 @@ func _ready() -> void:
 	if Game.mode != "single":
 		Game.start_single()
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	Sound.play_bgm("map")
 	UiStyle.background(self, Themes.get_theme(Game.current_chapter().theme).ui_bg)
 
 	var box := VBoxContainer.new()
@@ -106,5 +107,6 @@ func _button(parent: Control, text: String, accent: Color, action: Callable) -> 
 	b.custom_minimum_size = Vector2(200, 46)
 	b.add_theme_font_size_override("font_size", 20)
 	UiStyle.style_button(b, accent)
+	b.pressed.connect(Sound.play.bind("click"))
 	b.pressed.connect(action)
 	parent.add_child(b)

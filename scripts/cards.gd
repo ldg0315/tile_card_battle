@@ -1,19 +1,22 @@
 extends RefCounted
 ## 카드 정의.
-## 이동의 dir 과 공격의 range 는 모두 "상대좌표"(x = 앞쪽으로 몇 칸, y = 행 차이)다.
-## 실제 칸은 캐릭터의 facing 을 곱해 계산하므로, 캐릭터가 왼쪽/오른쪽 어디에 서 있든 정의는 하나만 둔다.
+## 이동의 dir 은 화면(보드) 기준 칸 수다(x+ = 오른쪽, y+ = 아래).
+## 공격의 range 는 "상대좌표"(x = 앞쪽으로 몇 칸, y = 행 차이)라 실제 칸은 캐릭터의 facing 을 곱해 계산한다 —
+## 캐릭터가 왼쪽/오른쪽 어디에 서 있든 공격 정의는 하나만 둔다.
 ## anim 은 화면 연출 종류(battle.gd 의 _attack_anim)다. 규칙은 읽지 않는다 — 새 스킬은 기존 연출을 골라 재사용하면 된다.
 
 const COMMON := {
-	"up": {"name": "위로", "type": "move", "dir": Vector2i(0, -1), "cost": 0},
-	"down": {"name": "아래로", "type": "move", "dir": Vector2i(0, 1), "cost": 0},
-	"fwd": {"name": "앞으로", "type": "move", "dir": Vector2i(1, 0), "cost": 0},
-	"back": {"name": "뒤로", "type": "move", "dir": Vector2i(-1, 0), "cost": 0},
+	# 이동은 화면(보드) 기준 방향이다. 몸이 향한 쪽 기준이면, 적을 넘어간 뒤 돌아서는 순간 "앞"이 바뀌어
+	# 같은 카드가 반대로 움직이는 혼동이 생겼다. 공격만 바라보는 쪽 기준(뒤잡기는 그대로).
+	"left": {"name": "← 왼쪽", "type": "move", "dir": Vector2i(-1, 0), "cost": 0},
+	"up": {"name": "↑ 위", "type": "move", "dir": Vector2i(0, -1), "cost": 0},
+	"down": {"name": "↓ 아래", "type": "move", "dir": Vector2i(0, 1), "cost": 0},
+	"right": {"name": "→ 오른쪽", "type": "move", "dir": Vector2i(1, 0), "cost": 0},
 	# 2칸 이동(질주). 중간 칸의 적은 뛰어넘고, 벽에 막히면 갈 수 있는 만큼만 간다(game_rules.move_target)
-	"dash_up": {"name": "위 2칸", "type": "move", "dir": Vector2i(0, -2), "cost": 5},
-	"dash_down": {"name": "아래 2칸", "type": "move", "dir": Vector2i(0, 2), "cost": 5},
-	"dash_fwd": {"name": "앞 2칸", "type": "move", "dir": Vector2i(2, 0), "cost": 5},
-	"dash_back": {"name": "뒤 2칸", "type": "move", "dir": Vector2i(-2, 0), "cost": 5},
+	"dash_left": {"name": "← 2칸", "type": "move", "dir": Vector2i(-2, 0), "cost": 5},
+	"dash_up": {"name": "↑ 2칸", "type": "move", "dir": Vector2i(0, -2), "cost": 5},
+	"dash_down": {"name": "↓ 2칸", "type": "move", "dir": Vector2i(0, 2), "cost": 5},
+	"dash_right": {"name": "→ 2칸", "type": "move", "dir": Vector2i(2, 0), "cost": 5},
 	"guard": {"name": "방어", "type": "guard", "cost": 0},
 	"rest": {"name": "기 모으기", "type": "rest", "cost": 0},
 }

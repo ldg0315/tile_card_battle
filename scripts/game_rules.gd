@@ -122,12 +122,12 @@ static func is_behind(defender: Fighter, from: Vector2i) -> bool:
 	return (from.x - defender.pos.x) * defender.facing < 0
 
 
-## 이동 카드의 도착 칸. dir 은 상대좌표(x = 앞쪽). 2칸 이동은 중간 칸을 따지지 않고 뛰어넘으며,
+## 이동 카드의 도착 칸. dir 은 화면(보드) 기준이라 바라보는 방향과 무관하다. 2칸 이동은 중간 칸을 따지지 않고 뛰어넘으며,
 ## 보드 밖이면 한 칸씩 줄여 갈 수 있는 만큼만 간다(질주 카드가 벽 앞에서 통째로 헛도는 건 손해가 너무 커서).
 ## 다른 전투원과의 충돌은 여기서 보지 않는다 — 동시 이동이라 모두의 목적지가 정해진 뒤 한꺼번에 판정한다.
 static func move_target(f: Fighter, dir: Vector2i) -> Vector2i:
 	var steps := maxi(absi(dir.x), absi(dir.y))
-	var unit := Vector2i(signi(dir.x) * f.facing, signi(dir.y))
+	var unit := Vector2i(signi(dir.x), signi(dir.y))
 	for k in range(steps, 0, -1):
 		var cand := f.pos + unit * k
 		if in_board(cand):
