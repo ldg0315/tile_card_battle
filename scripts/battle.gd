@@ -776,7 +776,7 @@ func _new_game() -> void:
 		_log("[b]%s · %s[/b]%s%s — %s 등장!\n" % [Game.stage_code(Game.chapter, Game.stage), st.name, wave_txt,
 			" (보스)" if st.get("boss", false) else "", ", ".join(names)])
 	_log("카드 3장을 순서대로 고르고 [b]실행[/b]을 누르세요.\n카드에 마우스를 올리면 범위가 노랗게 보입니다.")
-	_log("등 뒤를 치면 [b]뒤잡기[/b](피해 x%.1f), 방어는 정면만 막습니다. 이동 카드는 화면 기준(←→↑↓)이고, 이동하면 가장 가까운 적을 향해 돌아섭니다(발밑 화살표). 공격은 바라보는 쪽으로 나갑니다. MP 는 턴마다 %d 회복합니다." % [Rules.BACKSTAB_MULT, Rules.MP_REGEN])
+	_log("이동 카드는 화면 기준(←→↑↓)이고 다른 캐릭터에 막히지 않습니다(같은 칸 가능). 공격은 카드를 고를 때 바라보는 방향(발밑 화살표)으로 그 턴 내내 나가고, 턴이 끝나면 가장 가까운 적을 향해 돌아섭니다. 같은 칸의 적은 어떤 공격에도 맞습니다. MP 는 턴마다 %d 회복합니다." % Rules.MP_REGEN)
 	_log("[b]V[/b]: 1인칭(적이 여럿이면 [b]Tab[/b]으로 볼 적 전환). 바라보는 적이 2칸 이내면 카드를 엿볼 수 있습니다.")
 	_log("1인칭에선 왼쪽 위 [b]미니맵[/b]에 고른 카드의 예상 경로가 나옵니다. [b]Space[/b]를 누르는 동안 3인칭, [b]M[/b]은 미니맵 켜기·끄기, [b]L[/b]은 이 기록 창.")
 	result_panel.hide()
@@ -841,7 +841,10 @@ func _refresh_hand() -> void:
 		var order := selected.find(id)
 		# 고른 카드는 다시 눌러 해제할 수 있어야 하니 비활성으로 두지 않는다
 		var locked: bool = busy or rules.winner != -1
-		b.disabled = locked or (order == -1 and (full or used + cost > mp))
+		# 앞서 고른 카드를 쓴 뒤의 자리에서 보드 밖이라 못 가는 이동 카드는 고를 수 없다
+		var dead: bool = order == -1 and Cards.get_card(id).type == "move" and rules.first_dead_move(0, selected + [id]) != -1
+		b.disabled = locked or (order == -1 and (full or used + cost > mp or dead))
+		b.tooltip_text = "보드 밖이라 갈 수 없음" if dead else ""
 		b.text = ("%s " % ORDER_MARK[order] if order != -1 else "") + _card_text(Cards.get_card(id))
 		b.modulate = Color(1.0, 0.85, 0.35) if order != -1 else Color.WHITE
 	go_button.disabled = busy or not full
@@ -853,12 +856,17 @@ func _on_card_pressed(id: String) -> void:
 		return
 	if selected.has(id):
 		selected.erase(id)
+		# 앞 카드를 빼서 뒤 이동 카드가 보드 밖으로 나가게 되면 그 카드도 뺀다(고를 수 없는 조합이 남지 않게)
+		var dead: int = rules.first_dead_move(0, selected)
+		while dead != -1:
+			selected.remove_at(dead)
+			dead = rules.first_dead_move(0, selected)
 		Sound.play("deselect")
 		_refresh_hand()
 		return
 	if selected.size() >= Rules.CARDS_PER_TURN:
 		return
-	if rules.cost_of(selected + [id]) > rules.fighters[0].mp:
+	if rules.cost_of(selected + [id]) > rules.fighters[0].mp or rules.first_dead_move(0, selected + [id]) != -1:
 		return
 	selected.append(id)
 	Sound.play("select")
@@ -883,6 +891,11 @@ func _on_go() -> void:
 	var events: Array = rules.resolve_turn(plans)
 	for ev: Dictionary in events:
 		await _play_step(ev)
+	# 턴이 끝나면 규칙대로 모두 가장 가까운 적을 향해 돌아선다 — 다음 턴 미리보기는 이 방향 기준
+	for i in rules.fighters.size():
+		step_facing[i] = rules.fighters[i].facing
+		sprites[i].flip_h = step_facing[i] < 0
+		_update_mark(i)
 	busy = false
 	if rules.winner != -1:
 		_show_result()
@@ -1254,6 +1267,18 @@ func _slash_fx(full: bool, stab := false) -> void:
 
 # ---------------------------------------------------------------- 연출
 
+## 한 칸에 여럿이 서면 포개져 안 보이므로 칸 안에서 앞뒤로 살짝 비켜 세운다(규칙상으론 같은 칸).
+func _overlap_offset(i: int, ev: Dictionary) -> Vector3:
+	var same: Array[int] = []
+	for j in ev.pos.size():
+		if ev.pos[j] == ev.pos[i] and (j == i or ev.hp[j] > 0):
+			same.append(j)
+	if same.size() <= 1:
+		return Vector3.ZERO
+	var k := float(same.find(i)) - (same.size() - 1) / 2.0
+	return Vector3(k * 0.2, 0, k * 0.55)
+
+
 ## 캐릭터 i 가 칸 t 에 서 있을 때의 스프라이트 중심. i 를 빼면 보통 키 기준(발사체 높이 등).
 func _stand(t: Vector2i, i := -1) -> Vector3:
 	return _world(t) + Vector3(0, sprite_half[i] if i >= 0 else SPRITE_Y, 0)
@@ -1267,8 +1292,11 @@ func _play_step(ev: Dictionary) -> void:
 	var cards := []
 	for i in n:
 		cards.append(Cards.get_card(ev.cards[i]) if ev.cards[i] != "" else {})
-		step_pos[i] = _stand(ev.pos[i], i)
+		var off := _overlap_offset(i, ev)
+		step_pos[i] = _stand(ev.pos[i], i) + off
 		step_facing[i] = ev.facing[i]
+		# 같은 칸이면 뒤쪽 캐릭터의 카드 이름표를 올려 두 이름표가 포개지지 않게
+		card_tags[i].position.y = sprite_half[i] + 0.45 + (0.55 if off.z < 0.0 else 0.0)
 
 	# 누가 비우는 칸으로 들어가는 이동은 비우는 쪽을 먼저 보여줘야 몸이 겹쳐 지나가지 않는다
 	var order := range(n)
@@ -1395,7 +1423,7 @@ func _play_attack(i: int, card: Dictionary, ev: Dictionary) -> void:
 		await _wait(_attack_anim(i, card, h))
 		var landed := false
 		for tg: Dictionary in h.targets:
-			_on_hit(tg.to, i, tg.dmg, tg.back)
+			_on_hit(tg.to, i, tg.dmg)
 			landed = landed or tg.dmg > 0
 		if landed and card.get("anim", "") == "spin":
 			_hitstop(0.07)
@@ -1719,7 +1747,7 @@ func _particles(amount: int, life: float, from: Color, to: Color) -> CPUParticle
 	return p
 
 
-## 맞은 자리에서 튀는 불꽃. 뒤잡기는 더 크게.
+## 맞은 자리에서 튀는 불꽃. 큰 피해는 더 크게.
 func _hit_sparks(pos: Vector3, big: bool) -> void:
 	var p := _particles(26 if big else 14, 0.35, Color(1, 1, 0.85), Color(1, 0.45, 0.15))
 	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
@@ -1959,16 +1987,16 @@ func _recoil(i: int) -> void:
 
 
 ## 피해 숫자 + 공격자 반대쪽으로 밀림 + 화면 흔들림(피해가 클수록 세게).
-func _on_hit(target: int, attacker: int, dmg: int, back: bool) -> void:
-	Sound.play_at("block" if dmg <= 0 else ("backstab" if back else "hit"), step_pos[target])
+func _on_hit(target: int, attacker: int, dmg: int) -> void:
+	Sound.play_at("block" if dmg <= 0 else "hit", step_pos[target])
 	if first_person and target == 0:
-		hurt_flash.color.a = 0.4 if back else 0.28
+		hurt_flash.color.a = 0.28 + minf(0.15, dmg * 0.004)
 		_tween().tween_property(hurt_flash, "color:a", 0.0, 0.45)
 	else:
-		_damage_popup(target, dmg, back)
+		_damage_popup(target, dmg)
 	if dmg <= 0:
 		return
-	_hit_sparks(step_pos[target], back)
+	_hit_sparks(step_pos[target], dmg >= 30)
 	sprites[target].play("hit")
 	var away := step_pos[target] - step_pos[attacker]
 	away.y = 0
@@ -1978,7 +2006,7 @@ func _on_hit(target: int, attacker: int, dmg: int, back: bool) -> void:
 	var tw := _motion(target)
 	tw.tween_property(sprites[target], "position", step_pos[target] + away, 0.08)
 	tw.tween_property(sprites[target], "position", step_pos[target], 0.2)
-	_shake((0.1 + dmg * 0.005) * (1.6 if back else 1.0))
+	_shake(0.1 + dmg * 0.005)
 
 
 func _shake(strength: float) -> void:
@@ -1989,16 +2017,12 @@ func _shake(strength: float) -> void:
 	tw.tween_property(self, "shake_off", Vector3.ZERO, 0.05)
 
 
-func _damage_popup(target: int, dmg: int, back := false) -> void:
+func _damage_popup(target: int, dmg: int) -> void:
 	var l := Label3D.new()
 	l.text = "-%d" % dmg if dmg > 0 else "막음"
 	l.font_size = 64
 	l.outline_size = 12
 	l.modulate = Color(1, 0.35, 0.3)
-	if back:
-		l.text = "뒤잡기!\n-%d" % dmg
-		l.font_size = 76
-		l.modulate = Color(1, 0.65, 0.1)
 	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	l.no_depth_test = true
 	_fit_label(l)
@@ -2050,24 +2074,8 @@ func _planned_fighter(count: int):
 		var card: Dictionary = Cards.get_card(selected[k])
 		if card.type != "move":
 			continue
-		var t: Vector2i = Rules.move_target(me, card.dir)
-		var blocked := false
-		for j in rules.foes_of(0):
-			blocked = blocked or rules.fighters[j].pos == t
-		if not blocked:
-			me.pos = t
-			_face_nearest_plan(me)
-	return me
-
-
-func _face_nearest_plan(me) -> void:
-	var best := 99
-	for j in rules.foes_of(0):
-		var p: Vector2i = rules.fighters[j].pos
-		var d: int = absi(p.x - me.pos.x) + absi(p.y - me.pos.y)
-		if d < best and p.x != me.pos.x:
-			best = d
-			me.facing = signi(p.x - me.pos.x)
+		me.pos = Rules.move_target(me, card.dir)  # 다른 전투원에 막히지 않는다(같은 칸 허용)
+	return me  # 방향은 턴 중에 바뀌지 않으니 턴 시작 방향 그대로 — 그래서 미리보기가 실제 범위와 같다
 
 
 ## 미니맵용 예상 경로: 고른 카드마다 그 뒤의 자리·방향, 공격 카드면 그 자리에서의 범위.
@@ -2113,9 +2121,7 @@ func _step_text(ev: Dictionary) -> String:
 				s += " → 빗나감"
 			for tg: Dictionary in h.targets:
 				var who := _who(tg.to)
-				if tg.back:
-					s += " → %s 뒤잡기 %d" % [who, tg.dmg]
-				elif tg.dmg == 0:
+				if tg.dmg == 0:
 					s += " → %s 막힘" % who
 				else:
 					s += " → %s %d" % [who, tg.dmg]
@@ -2149,7 +2155,7 @@ func _handle_debug_args() -> void:
 		elif a == "--fp":
 			_toggle_view()
 		elif a.begins_with("--pos="):
-			# 뒤잡기처럼 특정 배치가 필요한 연출을 바로 보려고
+			# 특정 배치가 필요한 연출을 바로 보려고
 			var v := a.substr(6).split(",")
 			for i in mini(n, v.size() / 3):
 				rules.fighters[i].pos = Vector2i(int(v[i * 3]), int(v[i * 3 + 1]))

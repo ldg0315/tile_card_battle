@@ -27,7 +27,7 @@ func _ready() -> void:
 	box.add_theme_constant_override("separation", 12)
 	row.add_child(box)
 	box.add_child(UiStyle.label("타일 카드 배틀", 56, Color(1, 0.88, 0.5)))
-	box.add_child(UiStyle.label("카드 3장으로 읽고, 피하고, 뒤를 잡아라", 18, Color(0.75, 0.78, 0.85)))
+	box.add_child(UiStyle.label("카드 3장으로 읽고, 피하고, 베어라", 18, Color(0.75, 0.78, 0.85)))
 	var gap := Control.new()
 	gap.custom_minimum_size.y = 16
 	box.add_child(gap)

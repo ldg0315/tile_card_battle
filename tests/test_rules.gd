@@ -23,8 +23,7 @@ func _init() -> void:
 	_test_attack_and_guard()
 	_test_facing_flips_after_passing()
 	_test_facing_locked_during_turn()
-	_test_dash_backstab()
-	_test_backstab()
+	_test_same_tile_attack()
 	_test_simultaneous_ko_is_draw()
 	_test_selection_rules()
 	_test_ai_always_valid()
@@ -83,13 +82,14 @@ func _test_wall_blocks_move() -> void:
 	check(r.fighters[1].pos == Vector2i(3, 2), "보드 밖으로는 못 나감(뒤·아래)")
 
 
+## 전투원끼리는 막지 않는다: 같은 칸에 함께 서고, 자리를 맞바꿀 수도 있다.
 func _test_same_tile_and_swap_blocked() -> void:
 	var r = _setup(Vector2i(0, 1), Vector2i(2, 1))
 	r.resolve_turn(["right", "rest", "guard"], ["left", "rest", "guard"])
-	check(r.fighters[0].pos == Vector2i(0, 1) and r.fighters[1].pos == Vector2i(2, 1), "같은 칸 진입은 둘 다 제자리")
+	check(r.fighters[0].pos == Vector2i(1, 1) and r.fighters[1].pos == Vector2i(1, 1), "같은 칸으로 함께 들어갈 수 있음")
 	r = _setup(Vector2i(1, 1), Vector2i(2, 1))
 	r.resolve_turn(["right", "rest", "guard"], ["left", "rest", "guard"])
-	check(r.fighters[0].pos == Vector2i(1, 1) and r.fighters[1].pos == Vector2i(2, 1), "자리 맞바꾸기는 둘 다 제자리")
+	check(r.fighters[0].pos == Vector2i(2, 1) and r.fighters[1].pos == Vector2i(1, 1), "서로 자리를 맞바꿀 수 있음")
 
 
 func _test_attack_and_guard() -> void:
@@ -110,40 +110,21 @@ func _test_facing_flips_after_passing() -> void:
 	check(r.fighters[0].facing == -1 and r.fighters[1].facing == 1, "턴이 끝나면 서로 돌아섬")
 
 
-## 이동한 쪽은 바로 돌아서고, 가만히 있던 쪽은 방향을 유지한다 — 그래서 지나친 상대에게 등을 내준다.
+## 방향은 턴 도중엔 그대로(고를 때 본 범위 = 실제 범위), 턴이 끝나면 모두 가장 가까운 적을 향한다.
 func _test_facing_locked_during_turn() -> void:
 	var r = _setup(Vector2i(1, 0), Vector2i(2, 1))
-	var ev: Array = r.resolve_turn(["right", "dash_right", "rest"], ["rest", "rest", "rest"])
-	check(ev[0].facing[0] == 1, "같은 열로 오면 방향 유지")
-	check(ev[1].facing[0] == -1, "상대를 지나친 이동 직후 돌아섬")
-	check(ev[1].facing[1] == -1, "가만히 있던 쪽은 방향 유지(등을 내줌)")
-	check(r.fighters[1].facing == 1 and r.fighters[0].facing == -1, "턴이 끝나면 모두 가장 가까운 적을 향함")
+	var ev: Array = r.resolve_turn(["right", "dash_right", "sword_thrust"], ["rest", "rest", "rest"])
+	check(ev[1].facing[0] == 1 and ev[2].facing[0] == 1, "상대를 지나쳐도 턴 중엔 방향 유지")
+	check(ev[2].hits[0].tiles.has(Vector2i(3, 0)) == false and not ev[2].hits[0].hit, "지나친 뒤 찌르기는 고를 때 본 쪽(오른쪽, 보드 밖)으로 — 상대 쪽으로 돌지 않음")
+	check(r.fighters[0].facing == -1 and r.fighters[1].facing == 1, "턴이 끝나면 서로 돌아섬")
 
 
-## 2칸 이동으로 넘어가 바로 베면 뒤잡기.
-func _test_dash_backstab() -> void:
+## 같은 칸에 있는 적은 어떤 공격이든 맞는다(범위가 앞쪽만이어도).
+func _test_same_tile_attack() -> void:
 	var r = _setup(Vector2i(1, 1), Vector2i(2, 1))
-	var ev: Array = r.resolve_turn(["dash_right", "sword_slash", "guard"], ["rest", "guard", "rest"])
-	check(ev[0].facing[0] == -1, "넘어가자마자 상대를 향해 돌아섬")
-	check(ev[1].hits[0].back and ev[1].hits[0].dmg == int(25 * Rules.BACKSTAB_MULT), "넘어가서 벤 일반 베기가 뒤잡기, 방어도 무시")
-
-
-func _test_backstab() -> void:
-	# 상대가 나를 지나쳐 (0,0)에서 등을 보이는 상황: 상대 facing -1, 나는 오른쪽(1,1)
-	var r = Rules.new()
-	r.fighters[0].pos = Vector2i(1, 1)
-	r.fighters[0].facing = 1
-	r.fighters[1].pos = Vector2i(0, 0)
-	r.fighters[1].facing = -1
-	var ev: Array = r.resolve_turn(["sword_spin", "rest", "rest"], ["guard", "rest", "rest"])
-	var expected := int(15 * Rules.BACKSTAB_MULT)
-	check(ev[0].hits[0].back, "등 뒤 판정")
-	check(ev[0].hits[0].dmg == expected, "뒤잡기 배율 적용, 방어는 등 뒤를 못 막음 (%d)" % ev[0].hits[0].dmg)
-	r = _setup(Vector2i(1, 1), Vector2i(2, 1))
-	ev = r.resolve_turn(["sword_slash", "rest", "rest"], ["rest", "rest", "rest"])
-	check(not ev[0].hits[0].back and ev[0].hits[0].dmg == 25, "정면 공격은 배율 없음")
-	r = _setup(Vector2i(1, 0), Vector2i(1, 1))
-	check(not Rules.is_behind(r.fighters[1], r.fighters[0].pos), "같은 열(옆)은 뒤가 아님")
+	var ev: Array = r.resolve_turn(["right", "sword_slash", "guard"], ["rest", "rest", "rest"])
+	check(ev[0].pos[0] == ev[0].pos[1], "(준비) 같은 칸")
+	check(ev[1].hits[0].hit and ev[1].hits[0].dmg == 25, "같은 칸의 적은 앞 1칸 베기에도 맞음")
 
 
 func _test_simultaneous_ko_is_draw() -> void:
@@ -162,6 +143,13 @@ func _test_selection_rules() -> void:
 	r.fighters[0].mp = 50
 	check(not r.is_valid_selection(0, ["sword_thrust", "sword_spin", "right"]), "MP 초과 금지 (30+25 > 50)")
 	check(not r.is_valid_selection(0, ["archer_arrow", "right", "guard"]), "상대 캐릭터 카드 금지")
+	# 보드 밖으로 한 칸도 못 가는 이동은 고를 수 없다(시작 위치 (0,1))
+	r = Rules.new()
+	check(not r.is_valid_selection(0, ["left", "guard", "rest"]), "왼쪽 끝에서 ← 는 못 고름")
+	check(r.is_valid_selection(0, ["up", "guard", "rest"]), "위로는 갈 수 있음")
+	check(not r.is_valid_selection(0, ["up", "dash_up", "rest"]), "위로 간 뒤 또 위로는 못 고름(순서대로 따짐)")
+	check(r.is_valid_selection(0, ["dash_up", "guard", "rest"]), "2칸 이동은 1칸이라도 가면 고를 수 있음")
+	check(r.first_dead_move(0, ["right", "dash_right", "right"]) == 2, "막히는 카드의 순번을 알려줌")
 
 
 func _test_ai_always_valid() -> void:
@@ -315,11 +303,11 @@ func _test_multi_enemy() -> void:
 	ev = r.resolve_turn([["sword_slash", "rest", "guard"], ["rest", "rest", "rest"], ["left", "rest", "rest"]])
 	check(ev[0].died == [1] and r.winner == -1, "하나만 쓰러지면 계속")
 	check(ev[1].cards[1] == "", "쓰러진 적은 남은 카드를 내지 않음")
-	# 같은 칸 진입 충돌은 셋 이상이어도 관련된 쪽 모두 제자리
+	# 같은 칸 허용: 두 적이 한 칸에 모일 수 있고, 회전베기 한 번에 둘 다 맞는다
 	r = Rules.new("sword", ["slime", "mushroom"])
 	r.fighters[0].pos = Vector2i(2, 1)
 	r.resolve_turn([["rest", "rest", "rest"], ["down", "rest", "rest"], ["up", "rest", "rest"]])
-	check(r.fighters[1].pos == Vector2i(3, 0) and r.fighters[2].pos == Vector2i(3, 2), "두 적이 같은 칸으로 가려 하면 둘 다 제자리")
+	check(r.fighters[1].pos == Vector2i(3, 1) and r.fighters[2].pos == Vector2i(3, 1), "두 적이 같은 칸에 모일 수 있음")
 
 
 func _test_mp_regen() -> void:
@@ -329,7 +317,7 @@ func _test_mp_regen() -> void:
 	check(r.fighters[1].mp == mini(Rules.MAX_MP, Rules.START_MP + Rules.REST_MP + Rules.MP_REGEN), "회복은 최대치까지")
 
 
-## 2칸 이동: 비용 5, 중간의 적은 뛰어넘고, 벽 앞에선 갈 수 있는 만큼만.
+## 2칸 이동: 비용 5, 다른 전투원에 막히지 않고, 벽 앞에선 갈 수 있는 만큼만.
 func _test_dash() -> void:
 	var r = Rules.new()
 	var ev: Array = r.resolve_turn(["dash_right", "rest", "guard"], ["rest", "guard", "right"])
@@ -338,13 +326,13 @@ func _test_dash() -> void:
 	r = _setup(Vector2i(1, 1), Vector2i(2, 1))
 	r.resolve_turn(["dash_right", "rest", "guard"], ["rest", "guard", "rest"])
 	check(r.fighters[0].pos == Vector2i(3, 1), "가운데 적을 뛰어넘음")
-	check(r.fighters[0].facing == -1, "넘어가면 턴 끝에 돌아섬")
+	check(r.fighters[0].facing == -1, "넘어가면 상대를 향해 돌아섬")
 	r = _setup(Vector2i(0, 1), Vector2i(3, 1))
 	r.resolve_turn(["dash_up", "rest", "guard"], ["rest", "guard", "rest"])
 	check(r.fighters[0].pos == Vector2i(0, 0), "위가 1칸뿐이면 1칸만")
 	r = _setup(Vector2i(1, 1), Vector2i(3, 1))
 	r.resolve_turn(["dash_right", "rest", "guard"], ["rest", "guard", "rest"])
-	check(r.fighters[0].pos == Vector2i(1, 1), "도착 칸에 적이 있으면 제자리")
+	check(r.fighters[0].pos == Vector2i(3, 1), "도착 칸에 적이 있어도 들어감(같은 칸)")
 
 
 ## 임시 효과음이 모두 만들어지고, 소리가 실제로 있으며(무음 아님), 찢어지지 않는지.

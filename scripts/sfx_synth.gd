@@ -40,8 +40,6 @@ const PRESETS := {
 	"hit": {"notes": [{"wave": "sine", "f0": 160, "f1": 60, "dur": 0.16, "vol": 0.55, "noise": 0.55, "lp0": 0.3, "curve": 2.0}]},
 	"block": {"notes": [{"wave": "square", "f0": 1250, "dur": 0.18, "vol": 0.16, "curve": 2.5},
 		{"wave": "square", "f0": 1870, "dur": 0.12, "vol": 0.1, "curve": 2.5}]},
-	"backstab": {"notes": [{"wave": "sine", "f0": 180, "f1": 60, "dur": 0.14, "vol": 0.55, "noise": 0.6, "lp0": 0.35, "curve": 2.0},
-		{"wave": "square", "f0": 1500, "f1": 2100, "dur": 0.2, "vol": 0.16, "curve": 1.5}]},
 	"guard": {"notes": [{"wave": "square", "f0": 330, "f1": 440, "dur": 0.08, "vol": 0.2, "curve": 1.5}]},
 	"rest": {"notes": [{"wave": "sine", "f0": 600, "f1": 1300, "dur": 0.28, "vol": 0.2, "vib": 12.0, "curve": 0.8}]},
 	"heal": {"notes": [{"wave": "sine", "f0": 523, "dur": 0.1, "vol": 0.2, "curve": 0.6},

@@ -7,7 +7,7 @@ extends RefCounted
 
 const COMMON := {
 	# 이동은 화면(보드) 기준 방향이다. 몸이 향한 쪽 기준이면, 적을 넘어간 뒤 돌아서는 순간 "앞"이 바뀌어
-	# 같은 카드가 반대로 움직이는 혼동이 생겼다. 공격만 바라보는 쪽 기준(뒤잡기는 그대로).
+	# 같은 카드가 반대로 움직이는 혼동이 생겼다. 다른 캐릭터에 막히지 않는다(같은 칸 가능).
 	"left": {"name": "← 왼쪽", "type": "move", "dir": Vector2i(-1, 0), "cost": 0},
 	"up": {"name": "↑ 위", "type": "move", "dir": Vector2i(0, -1), "cost": 0},
 	"down": {"name": "↓ 아래", "type": "move", "dir": Vector2i(0, 1), "cost": 0},
@@ -84,7 +84,7 @@ const CHARACTERS := {
 			"king_splash": {"name": "점액 튀기기", "anim": "spin", "type": "attack", "cost": 20, "dmg": 10,
 				"range": [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1), Vector2i(-1, 0),
 					Vector2i(1, 0), Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1)]},
-			# 패턴 전용 대기술. 자기 위아래와 앞 2열을 덮지만 등 뒤는 비어 있다 — 뒤로 돌아가는 게 정답
+			# 패턴 전용 대기술. 자기 칸(같은 칸 규칙)·위아래·앞 2열을 덮는다 — 뒤쪽 열로 빠지는 게 정답
 			"king_crush": {"name": "대점프 압살", "anim": "jump", "type": "attack", "cost": 0, "dmg": 25,
 				"pattern_only": true,
 				"range": [Vector2i(0, -1), Vector2i(0, 1), Vector2i(1, -1), Vector2i(1, 0), Vector2i(1, 1),

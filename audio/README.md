@@ -20,7 +20,7 @@
 | `arrow` / `arrow_hit` | 화살 발사 / 화살이 바닥에 꽂힘 |
 | `volley` | 화살비 |
 | `wave` | 초음파 |
-| `hit` / `backstab` / `block` | 맞음 / 뒤잡기 / 방어로 다 막음 |
+| `hit` / `block` | 맞음 / 방어로 다 막음 |
 | `guard` / `rest` / `heal` | 방어 / 기 모으기 / 치유 |
 | `death` | 쓰러짐 |
 | `warn` | 보스 대기술 예고 |

@@ -14,7 +14,6 @@ const START_MP := 100  # 첫 턴부터 강한 카드를 섞어 쓸 수 있게 �
 const REST_MP := 25
 const MP_REGEN := 10  # 턴이 끝날 때마다 회복. 없으면 MP 가 바닥난 뒤 기 모으기만 반복하는 턴이 길어진다
 const GUARD_BLOCK := 15
-const BACKSTAB_MULT := 1.5
 const CARDS_PER_TURN := 3
 # 적 수 → 시작 행. 여럿이면 오른쪽 끝 열에 위아래로 벌려 세워, 처음부터 한 줄로 겹치지 않게
 const ENEMY_ROWS := {1: [1], 2: [0, 2], 3: [0, 1, 2]}
@@ -120,17 +119,28 @@ func is_valid_selection(idx: int, cards: Array) -> bool:
 		if not h.has(id) or seen.has(id):
 			return false
 		seen[id] = true
-	return cost_of(cards) <= fighters[idx].mp
+	return cost_of(cards) <= fighters[idx].mp and first_dead_move(idx, cards) == -1
 
 
-## from 이 defender 의 등 뒤(바라보는 반대쪽 열)에 있는가. 같은 열(위·아래)은 옆이라 뒤로 치지 않는다.
-static func is_behind(defender: Fighter, from: Vector2i) -> bool:
-	return (from.x - defender.pos.x) * defender.facing < 0
+## 고른 순서대로 이동했을 때 보드 밖이라 한 칸도 못 가는 이동 카드의 순번(없으면 -1).
+## 전투원끼리는 막지 않으니 내 이동 결과는 벽과 내 카드만으로 정해진다 → 고를 때 미리 막을 수 있다.
+## 2칸 이동은 1칸이라도 가면 괜찮다(갈 수 있는 만큼 간다).
+func first_dead_move(idx: int, cards: Array) -> int:
+	var f := fighters[idx].copy()
+	for k in cards.size():
+		var c: Dictionary = Cards.get_card(cards[k])
+		if c.get("type", "") != "move":
+			continue
+		var t := move_target(f, c.dir)
+		if t == f.pos:
+			return k
+		f.pos = t
+	return -1
 
 
 ## 이동 카드의 도착 칸. dir 은 화면(보드) 기준이라 바라보는 방향과 무관하다. 2칸 이동은 중간 칸을 따지지 않고 뛰어넘으며,
 ## 보드 밖이면 한 칸씩 줄여 갈 수 있는 만큼만 간다(질주 카드가 벽 앞에서 통째로 헛도는 건 손해가 너무 커서).
-## 다른 전투원과의 충돌은 여기서 보지 않는다 — 동시 이동이라 모두의 목적지가 정해진 뒤 한꺼번에 판정한다.
+## 다른 전투원은 막지 않는다 — 같은 칸에 함께 설 수 있고, 지나가거나 자리를 맞바꿀 수도 있다.
 static func move_target(f: Fighter, dir: Vector2i) -> Vector2i:
 	var steps := maxi(absi(dir.x), absi(dir.y))
 	var unit := Vector2i(signi(dir.x), signi(dir.y))
@@ -186,12 +196,8 @@ func _resolve_step(ids: Array) -> Dictionary:
 		"healed": _filled(n, 0)}
 	var block_of := _filled(n, 0)  # 이번 단계 방어량(철벽 방어는 더 많이 막는다)
 
-	# 1) 이동을 공격보다 먼저 처리한다 — 같은 단계에서 "피하는" 카드가 의미를 가지려면 이동이 선행해야 한다
-	var old := []
-	var dest := []
-	for f in fighters:
-		old.append(f.pos)
-		dest.append(f.pos)
+	# 1) 이동을 공격보다 먼저 처리한다 — 같은 단계에서 "피하는" 카드가 의미를 가지려면 이동이 선행해야 한다.
+	#    전투원끼리는 막지 않는다(같은 칸 허용). 막는 규칙은 "왜 안 움직였나"를 읽기 어렵게 만들었다
 	for i in n:
 		if cards[i].get("type", "") == "move":
 			# 이동도 비용이 있으면(2칸 이동) 여기서 낸다. 모자라면 공격과 같이 헛돈다
@@ -200,29 +206,9 @@ func _resolve_step(ids: Array) -> Dictionary:
 				ev.fizzled[i] = true
 				continue
 			fighters[i].mp -= cost
-			dest[i] = move_target(fighters[i], cards[i].dir)
-	# 같은 칸으로 들어가거나 서로 자리를 맞바꾸려 하면 관련된 쪽 모두 제자리. 한 번 되돌리면
-	# 그 자리로 들어오려던 다른 전투원과 새로 겹칠 수 있어서 더 이상 바뀌지 않을 때까지 반복한다.
-	# 한쪽에 우선권을 주지 않는 이유: 처리 순서가 곧 유불리가 돼 버린다.
-	var changed := true
-	while changed:
-		changed = false
-		for i in n:
-			for j in range(i + 1, n):
-				if not fighters[i].alive() or not fighters[j].alive():
-					continue
-				var clash: bool = dest[i] == dest[j] or (dest[i] == old[j] and dest[j] == old[i])
-				if clash and (dest[i] != old[i] or dest[j] != old[j]):
-					dest[i] = old[i]
-					dest[j] = old[j]
-					changed = true
-	for i in n:
-		fighters[i].pos = dest[i]
-	# 이동 카드를 쓴 쪽은 이동 직후 가장 가까운 적을 향해 돌아선다. 가만히 있던 쪽은 방향을 유지한다.
-	# 지나친 뒤에도 등을 보인 채 걸어다니는 어색함을 없애면서, "움직이지 않은 쪽이 등을 내준다"로 뒤잡기는 살린다
-	for i in n:
-		if cards[i].get("type", "") == "move" and not ev.fizzled[i]:
-			_face_nearest(i)
+			fighters[i].pos = move_target(fighters[i], cards[i].dir)
+	# 방향은 턴 도중에 바꾸지 않는다(턴 끝에만 _update_facing). 공격은 바라보는 쪽으로 나가니,
+	# 턴 중에 돌아서면 카드를 고를 때 본 범위와 실제 범위가 달라진다 — 특히 적이 넘어가는 경우는 미리 알 수도 없다
 
 	# 2) 방어·기 모으기·치유
 	for i in n:
@@ -260,20 +246,15 @@ func _resolve_step(ids: Array) -> Dictionary:
 		var targets := []
 		for j in foes_of(i):
 			var foe := fighters[j]
-			if not tiles.has(foe.pos):
+			# 같은 칸에 있는 적은 어떤 공격이든 맞는다 — 범위는 모두 "앞 몇 칸"이라 이게 없으면 같은 칸이 안전지대가 된다
+			if not tiles.has(foe.pos) and foe.pos != f.pos:
 				continue
-			var back := is_behind(foe, f.pos)
-			var raw := int(cards[i].dmg)
-			if back:
-				raw = int(raw * BACKSTAB_MULT)
-			# 방어는 정면만 막는다 — 등을 내준 쪽이 방어 카드로 손해를 만회하지 못해야 뒤잡기가 의미 있다
-			var block: int = block_of[j] if not back else 0
-			var d := maxi(0, raw - block)
+			var d := maxi(0, int(cards[i].dmg) - block_of[j])
 			dmg[j] += d
-			targets.append({"to": j, "dmg": d, "back": back})
+			targets.append({"to": j, "dmg": d})
 		var first: Dictionary = targets[0] if not targets.is_empty() else {}
 		ev.hits.append({"from": i, "tiles": tiles, "targets": targets, "hit": not targets.is_empty(),
-			"dmg": first.get("dmg", 0), "back": first.get("back", false)})
+			"dmg": first.get("dmg", 0)})
 	for j in n:
 		if not fighters[j].alive():
 			continue
@@ -294,8 +275,7 @@ func _resolve_step(ids: Array) -> Dictionary:
 	return ev
 
 
-## 턴이 끝나면 모두 가장 가까운 적 쪽으로 돌아선다. 턴 도중엔 이동한 쪽만 돌아선다(_resolve_step).
-## 매 단계 모두를 돌려세우지 않는 이유: 상대가 늘 나를 바라보게 돼 뒤잡기가 성립하지 않는다.
+## 턴이 끝나면 모두 가장 가까운 적 쪽으로 돌아선다. 다음 턴 카드는 이 방향을 기준으로 고른다.
 func _update_facing() -> void:
 	for i in fighters.size():
 		_face_nearest(i)

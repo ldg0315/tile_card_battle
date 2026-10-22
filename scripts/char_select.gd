@@ -7,7 +7,7 @@ const Cards := preload("res://scripts/cards.gd")
 
 const ACCENT := {"sword": Color(0.95, 0.4, 0.35), "archer": Color(0.35, 0.8, 0.6)}
 const BLURB := {
-	"sword": "가까이 붙어 베는 근접형. 한 방이 크고 회전베기로 등 뒤까지 벤다.",
+	"sword": "가까이 붙어 베는 근접형. 한 방이 크고 회전베기로 주변을 한꺼번에 벤다.",
 	"archer": "거리를 벌려 쏘는 원거리형. 3칸 화살로 다가오기 전에 깎는다.",
 }
 
