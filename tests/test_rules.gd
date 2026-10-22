@@ -297,6 +297,7 @@ func _test_boss_pattern() -> void:
 		var count := 0
 		for t in 8:
 			var plan: Dictionary = BossPlan.plan(r, 1, rng, st)
+			check(plan.cards.size() == 3, "%s: 매 턴 카드 3장 (턴 %d: %s)" % [boss, t, plan.cards])
 			if warned:
 				check(plan.cards.has(special), "%s: 예고 다음 턴은 대기술 (턴 %d)" % [boss, t])
 			if plan.cards.has(special):

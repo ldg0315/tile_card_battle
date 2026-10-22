@@ -46,4 +46,7 @@ static func plan(rules, idx: int, rng: RandomNumberGenerator, state: Dictionary)
 	if want is Array:
 		for k in want.size():
 			fixed[k] = null if want[k] == "ai" else want[k]
-	return {"cards": AI.choose(rules, idx, rng, fixed), "warn": step.get("warn", ""), "phase_msg": phase_msg}
+	# 세 칸이 모두 정해진 턴(예고 턴의 "기 모으기·방어·기 모으기")은 그대로 낸다. AI 에 맡기면 같은 카드 두 장을
+	# 선택 규칙(중복 금지) 위반으로 버려 빈 손이 됐다 — 보스가 아무것도 안 하고, 1인칭 간파 표시가 빈 배열에서 터졌다
+	var cards: Array = fixed if not fixed.has(null) else AI.choose(rules, idx, rng, fixed)
+	return {"cards": cards, "warn": step.get("warn", ""), "phase_msg": phase_msg}
