@@ -19,6 +19,10 @@ const ANIMS := {
 	"hit": {"fps": 8.0, "loop": false},
 	"guard": {"fps": 1.0, "loop": true},
 	"die": {"fps": 4.0, "loop": false},
+	# 기술별 공격 동작(카드의 anim 이름). 없으면 attack 을 그대로 쓴다 — 모든 캐릭터가 모든 기술 동작을 그릴 필요는 없다
+	"attack_thrust": {"fps": 12.0, "loop": false, "fallback": "attack"},
+	"attack_cross": {"fps": 12.0, "loop": false, "fallback": "attack"},
+	"attack_iai": {"fps": 12.0, "loop": false, "fallback": "attack"},
 }
 
 
@@ -33,6 +37,8 @@ static func build_frames(char_id: String) -> SpriteFrames:
 			if generated.is_empty():
 				generated = PixelArt.build(char_id)
 			texs.assign(generated.get(anim, []))
+		if texs.is_empty() and ANIMS[anim].has("fallback"):
+			texs = _frames_of(frames, ANIMS[anim].fallback)  # fallback 은 ANIMS 에서 앞에 있어 이미 채워져 있다
 		frames.add_animation(anim)
 		frames.set_animation_speed(anim, ANIMS[anim].fps)
 		frames.set_animation_loop(anim, ANIMS[anim].loop)
@@ -40,6 +46,13 @@ static func build_frames(char_id: String) -> SpriteFrames:
 			frames.add_frame(anim, t)
 	frames.set_meta("smooth", smooth == 1)
 	return frames
+
+
+static func _frames_of(frames: SpriteFrames, anim: String) -> Array[Texture2D]:
+	var out: Array[Texture2D] = []
+	for k in frames.get_frame_count(anim):
+		out.append(frames.get_frame_texture(anim, k))
+	return out
 
 
 static func is_smooth(frames: SpriteFrames) -> bool:

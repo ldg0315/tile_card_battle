@@ -11,6 +11,7 @@ art/<캐릭터id>/<동작>_<프레임수>.png
 - 캐릭터 id는 `scripts/cards.gd`의 키(`sword`, `archer`)와 같아야 합니다.
 - 동작은 `idle`(대기), `walk`(이동), `attack`(공격), `hit`(피격), `guard`(방어), `die`(쓰러짐) 여섯 가지입니다. `die`는 마지막 프레임에서 멈춘 뒤 서서히 사라집니다.
 - 예: `art/sword/attack_4.png`는 검사 공격 동작 4프레임입니다.
+- 기술마다 공격 자세를 따로 줄 수 있습니다: `attack_thrust`(찌르기), `attack_cross`(십자베기), `attack_iai`(발도술: 앞쪽 프레임은 웅크려 모으기). 어떤 기술이 어떤 자세를 쓰는지는 `scripts/cards.gd`의 `anim`입니다. 없으면 `attack`을 그대로 씁니다.
 - 프레임 수를 생략하면(`idle.png`) 한 장짜리로 봅니다.
 
 ## 그림 규칙

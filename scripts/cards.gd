@@ -26,7 +26,7 @@ const CHARACTERS := {
 		"name": "검사",
 		"body": Color(0.85, 0.22, 0.2),
 		"attacks": {
-			"sword_slash": {"name": "베기", "anim": "lunge", "type": "attack", "cost": 15, "dmg": 25,
+			"sword_slash": {"name": "베기", "anim": "slash", "type": "attack", "cost": 15, "dmg": 25,
 				"range": [Vector2i(1, 0)]},
 			"sword_spin": {"name": "회전베기", "anim": "spin", "type": "attack", "cost": 25, "dmg": 15,
 				"range": [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1), Vector2i(-1, 0),
@@ -122,12 +122,12 @@ const CHARACTERS := {
 		"hp": 140,
 		"scale": 1.25,
 		"attacks": {
-			"skel_slash": {"name": "베기", "anim": "lunge", "type": "attack", "cost": 15, "dmg": 25,
+			"skel_slash": {"name": "베기", "anim": "slash", "type": "attack", "cost": 15, "dmg": 25,
 				"range": [Vector2i(1, 0)]},
 			"skel_whirl": {"name": "대회전", "anim": "spin", "type": "attack", "cost": 30, "dmg": 20,
 				"range": [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1), Vector2i(-1, 0),
 					Vector2i(1, 0), Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1)]},
-			"skel_charge": {"name": "돌진찌르기", "anim": "thrust", "type": "attack", "cost": 35, "dmg": 30,
+			"skel_charge": {"name": "돌진찌르기", "anim": "rush", "type": "attack", "cost": 35, "dmg": 30,
 				"range": [Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0)]},
 			# 패턴 전용 대기술 — AI 가 아무 때나 고르지 못하고 boss_plan 이 정한 턴에만 나온다
 			"skel_storm": {"name": "망령 참격", "anim": "thrust", "type": "attack", "cost": 0, "dmg": 35,
@@ -157,11 +157,11 @@ const CHARACTERS := {
 # 얻은 카드는 그 던전을 도는 동안 손패에 더해진다(Game.extra_cards → Fighter.extra).
 const REWARDS := {
 	"sword": {
-		"sword_cross": {"name": "십자베기", "anim": "lunge", "type": "attack", "cost": 20, "dmg": 20,
+		"sword_cross": {"name": "십자베기", "anim": "cross", "type": "attack", "cost": 20, "dmg": 20,
 			"range": [Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]},
-		"sword_iai": {"name": "발도술", "anim": "thrust", "type": "attack", "cost": 40, "dmg": 45,
+		"sword_iai": {"name": "발도술", "anim": "iai", "type": "attack", "cost": 40, "dmg": 45,
 			"range": [Vector2i(1, 0)]},
-		"sword_rush": {"name": "돌진베기", "anim": "thrust", "type": "attack", "cost": 25, "dmg": 20,
+		"sword_rush": {"name": "돌진베기", "anim": "rush", "type": "attack", "cost": 25, "dmg": 20,
 			"range": [Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0)]},
 	},
 	"archer": {
