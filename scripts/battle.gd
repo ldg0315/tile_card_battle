@@ -116,6 +116,7 @@ var result_panel: PanelContainer
 var result_label: Label
 var result_buttons: HBoxContainer
 var card_buttons := {}  # card id -> Button
+var move_grid: GridContainer  # 손패의 이동 버튼 묶음(1인칭에선 몸 기준 순서로 다시 늘어놓는다)
 var compact_cards := false  # 손패가 많아 카드 폭을 줄였으면 카드 글씨도 짧게
 var view_button: Button
 var peek_label: Label
@@ -661,6 +662,7 @@ func _build_hand() -> void:
 	# 한 줄로 늘어놓던 때는 보상으로 카드가 늘수록 폭이 줄어 글씨가 잘리고 무엇이 공격인지 한눈에 안 들어왔다.
 	# 실제로 고민하는 건 공격 카드뿐이라, 나머지는 작게 접고 공격 카드에 폭을 몰아준다.
 	var moves := _hand_group(4)
+	move_grid = moves
 	hand_box.add_child(VSeparator.new())
 	var utils := _hand_group(2)
 	var attacks := 0
@@ -713,10 +715,14 @@ func _style_button(b: Button, accent: Color) -> void:
 	UiStyle.style_button(b, accent)
 
 
-func _card_text(card: Dictionary) -> String:
+func _card_text(card: Dictionary, facing := 1) -> String:
 	match card.type:
 		# 이동·보조 카드는 작은 한 줄 버튼이라 숫자만 붙인다
 		"move":
+			if first_person:
+				var body := _body_move_name(card, facing)
+				# "▲ 앞 2칸 ·MP5" 는 버튼 폭을 넘어 비용을 숫자만
+				return body if card.cost == 0 else "%s ·%d" % [body, card.cost]
 			return card.name if card.cost == 0 else "%s ·MP%d" % [card.name, card.cost]
 		"guard":
 			return "%s -%d%s" % [card.name, card.get("block", Rules.GUARD_BLOCK), " ·MP%d" % card.cost if card.cost > 0 else ""]
@@ -843,7 +849,7 @@ func _refresh_hand() -> void:
 	var used: int = rules.cost_of(selected)
 	var names := PackedStringArray()
 	for k in Rules.CARDS_PER_TURN:
-		names.append("%d)%s %s" % [k + 1, _initiative_mark(k), Cards.get_card(selected[k]).name if k < selected.size() else "—"])
+		names.append("%d)%s %s" % [k + 1, _initiative_mark(k), _card_name(selected[k], k) if k < selected.size() else "—"])
 	slot_label.text = "   ".join(names) + "        MP 사용 %d / %d" % [used, mp]
 	if selected.is_empty() and not busy:
 		slot_label.text += "    (고른 카드를 다시 누르면 해제)"
@@ -858,14 +864,60 @@ func _refresh_hand() -> void:
 		var dead: bool = order == -1 and Cards.get_card(id).type == "move" and rules.first_dead_move(0, selected + [id]) != -1
 		b.disabled = locked or (order == -1 and (full or used + cost > mp or dead))
 		b.tooltip_text = "보드 밖이라 갈 수 없음" if dead else ""
-		b.text = ("%s " % ORDER_MARK[order] if order != -1 else "") + _card_text(Cards.get_card(id))
+		# 방향이 들어간 표기(1인칭 이동 이름, 범위 그림)는 그 카드를 쓸 때의 예상 방향으로 —
+		# 고른 카드는 그 순번, 아직 안 고른 카드는 다음 순번. 앞서 고른 이동으로 적을 지나치면 바로 바뀐다(보드 미리보기와 같은 계산)
+		var slot := order if order != -1 else selected.size()
+		var facing: int = _planned_fighter(slot).facing
+		b.text = ("%s " % ORDER_MARK[order] if order != -1 else "") + _card_text(Cards.get_card(id), facing)
 		if Cards.get_card(id).type == "attack":
-			# 범위 그림은 그 카드를 쓸 때의 예상 방향으로(고른 카드는 그 순번, 아직 안 고른 카드는 다음 순번).
-			# 앞서 고른 이동으로 적을 지나치면 남은 공격 카드 그림이 바로 뒤집힌다 — 보드 미리보기와 같은 계산
-			var facing: int = _planned_fighter(order if order != -1 else selected.size()).facing
-			b.icon = RangeIcon.make(Cards.get_card(id), 8, facing)
+			# 1인칭은 앞이 위로 가게 작게 돌려 그린다(세로로 길어져 카드 높이에 맞춰 칸을 줄임)
+			b.icon = RangeIcon.make(Cards.get_card(id), 6 if first_person else 8, facing, first_person)
 		b.modulate = Color(1.0, 0.85, 0.35) if order != -1 else Color.WHITE
+	_arrange_moves()
 	go_button.disabled = busy or not full
+
+
+## 1인칭에선 이동 버튼을 몸 기준 왼쪽·앞·뒤·오른쪽 순으로(3인칭의 ← ↑ ↓ → 자리와 같은 배치), 2칸 이동은 아랫줄에.
+## 3인칭은 손패 순서(← ↑ ↓ →) 그대로라 다시 늘어놓을 필요가 없지만, 1인칭에서 돌아올 때 되돌려야 해서 함께 처리한다.
+func _arrange_moves() -> void:
+	var facing: int = _planned_fighter(selected.size()).facing
+	var ids: Array = []
+	for id: String in card_buttons:
+		if Cards.get_card(id).type == "move":
+			ids.append(id)
+	var key := func(id: String) -> int:
+		var d: Vector2i = Cards.get_card(id).dir
+		var row := 0 if maxi(absi(d.x), absi(d.y)) == 1 else 4
+		if not first_person:
+			return row + ["l", "u", "d", "r"].find("l" if d.x < 0 else ("r" if d.x > 0 else ("u" if d.y < 0 else "d")))
+		return row + ["◀", "▲", "▼", "▶"].find(_body_arrow(d, facing))
+	ids.sort_custom(func(a: String, b: String) -> bool: return key.call(a) < key.call(b))
+	for k in ids.size():
+		move_grid.move_child(card_buttons[ids[k]], k)
+
+
+## 보드 방향 d 가 facing 을 향한 몸 기준으로 앞(▲)·뒤(▼)·왼쪽(◀)·오른쪽(▶) 중 어디인지.
+## 오른쪽을 보면 보드 위쪽이 몸의 왼쪽, 왼쪽을 보면 몸의 오른쪽이다(1인칭 카메라에서 보이는 그대로).
+static func _body_arrow(d: Vector2i, facing: int) -> String:
+	if d.x != 0:
+		return "▲" if signi(d.x) == facing else "▼"
+	return "◀" if signi(d.y) == -facing else "▶"
+
+
+## 슬롯 표시용 카드 이름. 1인칭 이동 카드는 그 순번에서의 몸 기준으로 부른다.
+func _card_name(id: String, slot: int) -> String:
+	var card: Dictionary = Cards.get_card(id)
+	if first_person and card.type == "move":
+		return _body_move_name(card, _planned_fighter(slot).facing)
+	return card.name
+
+
+## 1인칭 이동 카드 이름: "▲ 앞", "◀ 왼쪽 2칸". 3인칭의 화면 기준(→ 오른쪽)은 1인칭에선 지금 화면의 어느 쪽인지 따로 따져야 해서
+## 몸 기준으로 바꿔 부른다. 카드(규칙)는 그대로이고 이름만 바뀐다.
+func _body_move_name(card: Dictionary, facing: int) -> String:
+	var arrow := _body_arrow(card.dir, facing)
+	var word: String = {"▲": "앞", "▼": "뒤", "◀": "왼쪽", "▶": "오른쪽"}[arrow]
+	return "%s %s" % [arrow, word] if card.cost == 0 else "%s %s 2칸" % [arrow, word]
 
 
 ## 대전에서 k 번째 단계에 내가 먼저면 "선", 나중이면 "후". 싱글은 늘 내가 먼저라 표시하지 않는다.
@@ -1063,6 +1115,8 @@ func _toggle_view() -> void:
 	viewmodel.texture = _make_viewmodel(rules.fighters[0].char_id)
 	viewmodel.visible = first_person
 	compass_label.visible = first_person
+	# 이동 카드 이름·배치와 범위 그림이 시점에 따라 달라진다(1인칭은 몸 기준)
+	_refresh_hand()
 	if not first_person:
 		for m in offscreen_marks:
 			m.hide()
@@ -1161,10 +1215,9 @@ func _update_fp_hud() -> void:
 	var flat_fwd := Vector3(fwd.x, 0, fwd.z).normalized()
 	var flat_right := Vector3(right.x, 0, right.z).normalized()
 	var hint := "   [Tab] 볼 적 바꾸기" if rules.foes_of(0).size() > 1 else ""
-	# 1인칭에선 고개를 돌리니 화면 기준 이동 카드(→)가 지금 어느 쪽인지도 같이 알려준다
-	compass_label.text = "공격 방향(내 정면) %s   → 카드는 %s%s" % [
-		_screen_arrow(Vector3(step_facing[0], 0, 0), flat_fwd, flat_right),
-		_screen_arrow(Vector3.RIGHT, flat_fwd, flat_right), hint]
+	# 1인칭의 이동 카드는 몸 기준(앞·뒤·왼·오)이라, 카메라가 적을 보느라 고개를 돌렸을 때 몸 앞이 어느 쪽인지만 알려준다
+	compass_label.text = "카드의 앞(공격 방향) %s%s" % [
+		_screen_arrow(Vector3(step_facing[0], 0, 0), flat_fwd, flat_right), hint]
 
 	var view := get_viewport().get_visible_rect().size
 	var area := ui_root.size
