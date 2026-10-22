@@ -253,8 +253,10 @@ func _resolve_step(ids: Array, step: int) -> Dictionary:
 			match type:
 				"move":
 					# 전투원끼리는 막지 않는다(같은 칸 허용). 막는 규칙은 "왜 안 움직였나"를 읽기 어렵게 만들었다.
-					# 방향은 턴 도중에 바꾸지 않는다(턴 끝에만 _update_facing) — 고를 때 본 공격 범위가 실제와 같게
+					# 이동한 쪽은 착지하자마자 가장 가까운 적을 향해 돈다. 턴 끝까지 방향을 묶어 두었더니
+					# 적을 지나친 뒤에도 등진 채 엉뚱한 쪽으로 공격해 어색했다. 미리보기도 같은 규칙으로 돌려 보여준다
 					f.pos = move_target(f, cards[i].dir)
+					_face_nearest(i)
 				"rest":
 					f.mp = mini(MAX_MP, f.mp + REST_MP)
 				"heal":
@@ -309,28 +311,31 @@ func _snapshot(ev: Dictionary, ids: Array, hits: Array, died: Array) -> Dictiona
 	return a
 
 
-## 턴이 끝나면 모두 가장 가까운 적 쪽으로 돌아선다. 다음 턴 카드는 이 방향을 기준으로 고른다.
+## 턴이 끝나면 모두 가장 가까운 적 쪽으로 돌아선다(이동하지 않은 쪽도). 다음 턴 카드는 이 방향을 기준으로 고른다.
 func _update_facing() -> void:
 	for i in fighters.size():
 		_face_nearest(i)
 
 
-## 가장 가까운 적 쪽 열을 바라보게 한다. 같은 열(위·아래)이면 직전 방향을 유지한다.
 func _face_nearest(i: int) -> void:
-	if not fighters[i].alive():
-		return
+	if fighters[i].alive():
+		fighters[i].facing = nearest_facing(i, fighters[i])
+
+
+## f(i 번 전투원이거나 그 예상 상태)가 가장 가까운 적 쪽 열을 바라볼 방향. 같은 열(위·아래)이면 지금 방향 그대로.
+## 화면의 미리보기가 예상 자리에서 같은 계산을 하려고 Fighter 를 따로 받는다.
+func nearest_facing(i: int, f: Fighter) -> int:
 	var best := -1
 	var best_d := 99
 	for j in foes_of(i):
-		var d := absi(fighters[j].pos.x - fighters[i].pos.x) + absi(fighters[j].pos.y - fighters[i].pos.y)
+		var d := absi(fighters[j].pos.x - f.pos.x) + absi(fighters[j].pos.y - f.pos.y)
 		if d < best_d:
 			best_d = d
 			best = j
 	if best == -1:
-		return
-	var dx := fighters[best].pos.x - fighters[i].pos.x
-	if dx != 0:
-		fighters[i].facing = signi(dx)
+		return f.facing
+	var dx := fighters[best].pos.x - f.pos.x
+	return signi(dx) if dx != 0 else f.facing
 
 
 func _check_winner() -> void:

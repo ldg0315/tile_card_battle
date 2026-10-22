@@ -22,7 +22,7 @@ func _init() -> void:
 	_test_same_tile_and_swap_blocked()
 	_test_attack_and_guard()
 	_test_facing_flips_after_passing()
-	_test_facing_locked_during_turn()
+	_test_turn_after_passing()
 	_test_same_tile_attack()
 	_test_first_mover_wins_trade()
 	_test_step_order()
@@ -115,12 +115,15 @@ func _test_facing_flips_after_passing() -> void:
 	check(r.fighters[0].facing == -1 and r.fighters[1].facing == 1, "턴이 끝나면 서로 돌아섬")
 
 
-## 방향은 턴 도중엔 그대로(고를 때 본 범위 = 실제 범위), 턴이 끝나면 모두 가장 가까운 적을 향한다.
-func _test_facing_locked_during_turn() -> void:
-	var r = _setup(Vector2i(1, 0), Vector2i(2, 1))
-	var ev: Array = r.resolve_turn(["right", "dash_right", "sword_thrust"], ["rest", "rest", "rest"])
-	check(ev[1].facing[0] == 1 and ev[2].facing[0] == 1, "상대를 지나쳐도 턴 중엔 방향 유지")
-	check(ev[2].hits[0].tiles.has(Vector2i(3, 0)) == false and not ev[2].hits[0].hit, "지나친 뒤 찌르기는 고를 때 본 쪽(오른쪽, 보드 밖)으로 — 상대 쪽으로 돌지 않음")
+## 이동한 쪽은 착지하자마자 가장 가까운 적을 향한다 — 지나친 적을 등지고 공격하지 않는다.
+func _test_turn_after_passing() -> void:
+	var r = _setup(Vector2i(1, 1), Vector2i(2, 1))
+	var ev: Array = r.resolve_turn(["dash_right", "sword_thrust", "rest"], ["rest", "rest", "rest"])
+	check(ev[0].facing[0] == -1, "상대를 지나치면 착지하자마자 돌아섬")
+	check(ev[1].hits[0].hit and r.fighters[1].hp == Rules.MAX_HP - 30, "지나친 뒤 찌르기는 상대 쪽으로")
+	r = _setup(Vector2i(1, 1), Vector2i(2, 1))
+	ev = r.resolve_turn(["rest", "rest", "rest"], ["dash_left", "rest", "rest"])
+	check(ev[0].facing[0] == 1, "이동하지 않은 쪽은 턴 중엔 그대로")
 	check(r.fighters[0].facing == -1 and r.fighters[1].facing == 1, "턴이 끝나면 서로 돌아섬")
 
 

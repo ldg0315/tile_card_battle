@@ -689,7 +689,6 @@ func _build_hand() -> void:
 				b.custom_minimum_size = Vector2(big_w, 74)
 				b.clip_text = compact_cards  # 폭을 줄였을 때만 — 보통 폭에선 자르면 "MP 15" 의 숫자가 잘렸다
 				b.add_theme_font_size_override("font_size", 14 if not compact_cards else 12)
-				b.icon = RangeIcon.make(card, 8)
 				b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 				b.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
 				hand_box.add_child(b)
@@ -786,7 +785,7 @@ func _new_game() -> void:
 		_log("[b]%s · %s[/b]%s%s — %s 등장!\n" % [Game.stage_code(Game.chapter, Game.stage), st.name, wave_txt,
 			" (보스)" if st.get("boss", false) else "", ", ".join(names)])
 	_log("카드 3장을 순서대로 고르고 [b]실행[/b]을 누르세요.\n카드에 마우스를 올리면 범위가 노랗게 보입니다.")
-	_log("이동 카드는 화면 기준(←→↑↓)이고 다른 캐릭터에 막히지 않습니다(같은 칸 가능). 공격은 카드를 고를 때 바라보는 방향(발밑 화살표)으로 그 턴 내내 나가고, 턴이 끝나면 가장 가까운 적을 향해 돌아섭니다. 같은 칸의 적은 어떤 공격에도 맞습니다. MP 는 턴마다 %d 회복합니다." % Rules.MP_REGEN)
+	_log("이동 카드는 화면 기준(←→↑↓)이고 다른 캐릭터에 막히지 않습니다(같은 칸 가능). 공격은 바라보는 방향(발밑 화살표)으로 나갑니다. 이동하면 착지하자마자, 이동하지 않았으면 턴이 끝날 때 가장 가까운 적을 향해 돌아섭니다. 같은 칸의 적은 어떤 공격에도 맞습니다. MP 는 턴마다 %d 회복합니다." % Rules.MP_REGEN)
 	if rules.alternate:
 		_log("같은 단계의 카드는 한 명씩 차례로 나갑니다. 단계마다 먼저 움직이는 쪽이 번갈아 바뀌니 카드 칸의 [b][선][/b]·[b][후][/b]를 보고 고르세요. 방어는 순서와 상관없이 그 단계 내내 걸립니다.")
 	else:
@@ -860,6 +859,11 @@ func _refresh_hand() -> void:
 		b.disabled = locked or (order == -1 and (full or used + cost > mp or dead))
 		b.tooltip_text = "보드 밖이라 갈 수 없음" if dead else ""
 		b.text = ("%s " % ORDER_MARK[order] if order != -1 else "") + _card_text(Cards.get_card(id))
+		if Cards.get_card(id).type == "attack":
+			# 범위 그림은 그 카드를 쓸 때의 예상 방향으로(고른 카드는 그 순번, 아직 안 고른 카드는 다음 순번).
+			# 앞서 고른 이동으로 적을 지나치면 남은 공격 카드 그림이 바로 뒤집힌다 — 보드 미리보기와 같은 계산
+			var facing: int = _planned_fighter(order if order != -1 else selected.size()).facing
+			b.icon = RangeIcon.make(Cards.get_card(id), 8, facing)
 		b.modulate = Color(1.0, 0.85, 0.35) if order != -1 else Color.WHITE
 	go_button.disabled = busy or not full
 
@@ -2114,7 +2118,8 @@ func _planned_fighter(count: int):
 		if card.type != "move":
 			continue
 		me.pos = Rules.move_target(me, card.dir)  # 다른 전투원에 막히지 않는다(같은 칸 허용)
-	return me  # 방향은 턴 중에 바뀌지 않으니 턴 시작 방향 그대로 — 그래서 미리보기가 실제 범위와 같다
+		me.facing = rules.nearest_facing(0, me)
+	return me
 
 
 ## 미니맵용 예상 경로: 고른 카드마다 그 뒤의 자리·방향, 공격 카드면 그 자리에서의 범위.
