@@ -26,7 +26,8 @@ const CHARACTERS := {
 		"name": "검사",
 		"body": Color(0.85, 0.22, 0.2),
 		"attacks": {
-			"sword_slash": {"name": "베기", "anim": "slash", "type": "attack", "cost": 15, "dmg": 25,
+			# 기본기. 내려베기(베기) 대신 뛰어오르며 올려벤다 — 위력·범위는 베기와 같고 모양만 다르다
+			"sword_rise": {"name": "올려베기", "anim": "rise", "type": "attack", "cost": 15, "dmg": 25,
 				"range": [Vector2i(1, 0)]},
 			"sword_spin": {"name": "회전베기", "anim": "spin", "type": "attack", "cost": 25, "dmg": 15,
 				"range": [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1), Vector2i(-1, 0),

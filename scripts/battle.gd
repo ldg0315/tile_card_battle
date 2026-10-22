@@ -78,6 +78,7 @@ var cam_smooth: Transform3D  # 흔들림을 빼고 부드럽게 따라가는 카
 var shake_off := Vector3.ZERO
 var fov_kick := 0.0  # 1인칭 기술 반동으로 잠깐 좁아지는 시야
 var fp_spin := 0.0  # 1인칭 회전베기 중 카메라가 더 돌아간 각도(라디안)
+var fp_pitch := 0.0  # 1인칭 올려베기 중 시선을 들어 올리는 높이(바라보는 점을 위로 옮긴다)
 # 1인칭에서 내가 공격하는 동안엔 적이 아니라 몸 정면(실제 공격 방향)을 본다.
 # 적을 본 채로 찌르면 빗나가는 공격도 맞는 것처럼 보여서 착각을 부른다
 var fp_face_lock := false
@@ -1272,6 +1273,7 @@ func _fp_xform() -> Transform3D:
 	if fp_free and not fp_face_lock:
 		# 자유 시점: 높이·내려다보는 각도는 고정 시점과 같고 좌우만 fp_yaw 로
 		look = eye + Vector3(-sin(fp_yaw), 0, -cos(fp_yaw)) * 4.0 + Vector3(0, -1.3, 0)
+	look.y += fp_pitch
 	var xf := Transform3D(Basis(), eye).looking_at(look, Vector3.UP)
 	if fp_spin != 0.0:
 		xf.basis = Basis(Vector3.UP, fp_spin) * xf.basis
@@ -1396,6 +1398,27 @@ func _fp_attack_fx(card: Dictionary) -> void:
 				var cs := _tween()
 				cs.tween_property(self, "fp_spin", TAU, SPIN_TIME).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 				cs.tween_callback(func() -> void: fp_spin = 0.0)
+		"rise":
+			# 칼을 화면 아래로 내렸다가 위로 쳐올린다. 몸이 뛰어오르니 카메라는 저절로 솟고(_rise),
+			# 시선도 위로 들었다 내려와 "올려 벤다"는 게 1인칭에서도 느껴지게
+			vm.tween_property(self, "vm_offset", Vector2(-40, 160), 0.1)
+			vm.parallel().tween_property(viewmodel, "rotation_degrees", 30.0, 0.1)
+			vm.tween_property(self, "vm_offset", Vector2(-180, -230), 0.12).set_ease(Tween.EASE_OUT)
+			vm.parallel().tween_property(viewmodel, "rotation_degrees", -40.0, 0.12)
+			vm.tween_interval(0.1)
+			vm.tween_property(self, "vm_offset", Vector2.ZERO, 0.25)
+			vm.parallel().tween_property(viewmodel, "rotation_degrees", 0.0, 0.25)
+			var pt := _tween()
+			pt.tween_interval(0.1)
+			pt.tween_property(self, "fp_pitch", 1.6, 0.16).set_ease(Tween.EASE_OUT)
+			pt.tween_interval(0.12)
+			pt.tween_property(self, "fp_pitch", 0.0, 0.25).set_ease(Tween.EASE_IN_OUT)
+			var c := ui_root.size / 2.0 + Vector2(-60, 0)
+			var pts := []
+			for k in 14:
+				var a := lerpf(PI * 0.62, PI * 1.38, k / 13.0)  # 왼쪽 아래 → 위로 휘어 오른쪽 위
+				pts.append(c + Vector2(cos(a) * -260.0 + 60.0, sin(a) * -260.0 * -1.0))
+			_screen_line(pts, 22.0, 0.12)
 		"cross":
 			# 칼을 치켜들었다 곧게 내려치고(세로 궤적), 이어서 가로로 쓴다(가로 궤적)
 			vm.tween_property(viewmodel, "rotation_degrees", 25.0, 0.1)
@@ -1726,6 +1749,8 @@ func _attack_anim(i: int, card: Dictionary, h: Dictionary) -> float:
 		"slash":
 			_blade_fx(i, "arc", 0.08, 1.0)
 			return _lunge(i, 0.35)
+		"rise":
+			return _rise(i)
 		"thrust":
 			return _thrust(i, h)
 		"cross":
@@ -1754,6 +1779,23 @@ func _lunge(i: int, dist: float) -> float:
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_property(sprites[i], "position", base, 0.2)
 	return 0.12
+
+
+## 올려베기: 살짝 웅크렸다가 앞 위로 뛰어오르며 쳐올리고, 잠깐 떠 있다가 내려앉는다.
+## 몸(스프라이트)이 실제로 뜨므로 1인칭 카메라도 같이 솟는다(_fp_xform 이 몸 위치를 따라감) — 1인칭 연출은 _fp_attack_fx 의 "rise".
+func _rise(i: int) -> float:
+	var s := sprites[i]
+	var base := step_pos[i]
+	var f := step_facing[i]
+	var top := base + Vector3(f * TILE * 0.25, 1.4, 0)
+	var tw := _motion(i)
+	tw.tween_property(s, "position", base + Vector3(0, -0.12, 0), 0.1).set_ease(Tween.EASE_OUT)
+	tw.tween_property(s, "position", top, 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.14)
+	tw.tween_property(s, "position", base, 0.2).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_callback(_dust.bind(base + Vector3(0, -sprite_half[i] + 0.1, 0)))
+	_blade_fx(i, "rise", 0.12, 1.0)
+	return 0.2
 
 
 ## 찌르기: 칼을 뒤로 당겼다(0.12초) 범위 끝까지 곧게 뻗는다. 뻗는 순간 범위 칸을 따라 직선 궤적.
@@ -1875,6 +1917,10 @@ func _blade_fx(i: int, kind: String, delay: float, length: float, at := 0.0) -> 
 			sp.rotation = Vector3(-PI / 2, PI / 2, 0)
 			sp.pixel_size = TILE * 3.0 / tex.get_width()
 			sp.position = feet + Vector3(0, 0.08, 0)
+		"rise":
+			# 앞 아래에서 머리 위로 솟는 궤적 — 몸이 뜨는 만큼 위쪽까지
+			sp.pixel_size = TILE * 1.6 / tex.get_height()
+			sp.position = feet + Vector3(f * TILE * (at + 0.45), 1.6, 0)
 		_:
 			sp.pixel_size = TILE * 1.3 / tex.get_height()
 			sp.position = feet + Vector3(f * TILE * (at + 0.55), 1.1, 0)
@@ -1905,6 +1951,17 @@ func _blade_tex(kind: String) -> Texture2D:
 					var inner := p.distance_to(Vector2(-6, 48)) < 46.0
 					if outer and not inner:
 						var a := clampf(1.0 - absf(y - 48.0) / 48.0, 0.0, 1.0)
+						img.set_pixel(x, y, Color(1, 1, 1, a))
+		"rise":
+			# 올려베기: 앞 아래에서 시작해 위로 휘어 오르는 초승달(아래 끝이 가늘고 위로 갈수록 굵다)
+			img = Image.create(64, 96, false, Image.FORMAT_RGBA8)
+			for y in 96:
+				for x in 64:
+					var p := Vector2(x, y)
+					var outer := p.distance_to(Vector2(-14, 52)) < 58.0
+					var inner := p.distance_to(Vector2(-26, 60)) < 56.0
+					if outer and not inner and p.x > 4:
+						var a := clampf(1.0 - y / 96.0, 0.15, 1.0)
 						img.set_pixel(x, y, Color(1, 1, 1, a))
 		"streak", "flash":
 			# 앞(오른쪽)으로 갈수록 굵고 밝아지는 가로 줄. 섬광은 더 가늘고 길게

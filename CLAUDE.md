@@ -15,7 +15,7 @@
 - 테스트: `tools/run_tests.sh` (모든 스크립트 문법 검사 + 규칙 테스트, SCRIPT ERROR 가 나면 실패)
 - 화면 확인: 메뉴를 거치지 않는 개발용 인자로 바로 찍습니다. 예:
   ```bash
-  /Applications/Godot.app/Contents/MacOS/Godot --path . -- --stage=1-3 --pos=1,1,1,2,1,-1 --cards=sword_slash,rest,guard --auto --mid=0.4,0.6 --shot=$PWD/shots/a.png
+  /Applications/Godot.app/Contents/MacOS/Godot --path . -- --stage=1-3 --pos=1,1,1,2,1,-1 --cards=sword_rise,rest,guard --auto --mid=0.4,0.6 --shot=$PWD/shots/a.png
   ```
   인자 목록은 `battle.gd`의 `_handle_debug_args`와 `game_state.gd`에 있습니다. 출력은 `/tmp`가 아니라 프로젝트 안(`shots/`)에 둡니다.
 - 메뉴를 건너뛰는 실행 경로(`--stage=` 등, 장면 직접 실행)는 항상 유지합니다.

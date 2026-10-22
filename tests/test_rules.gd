@@ -96,7 +96,7 @@ func _test_same_tile_and_swap_blocked() -> void:
 
 func _test_attack_and_guard() -> void:
 	var r = _setup(Vector2i(1, 1), Vector2i(2, 1))
-	var ev: Array = r.resolve_turn(["sword_slash", "rest", "rest"], ["guard", "rest", "rest"])
+	var ev: Array = r.resolve_turn(["sword_rise", "rest", "rest"], ["guard", "rest", "rest"])
 	check(ev[0].hits[0].hit and ev[0].hits[0].dmg == 25 - Rules.GUARD_BLOCK, "방어 중 피해 감소")
 	check(r.fighters[1].hp == Rules.MAX_HP - (25 - Rules.GUARD_BLOCK), "HP 반영")
 	check(ev[0].mp[0] == Rules.START_MP - 15, "공격 MP 소모")
@@ -104,7 +104,7 @@ func _test_attack_and_guard() -> void:
 	r.resolve_turn(["up", "rest", "rest"], ["archer_kick", "rest", "rest"])
 	check(r.fighters[0].hp == Rules.MAX_HP, "먼저 움직이면 같은 단계 상대 공격을 피함")
 	r = _setup(Vector2i(1, 1), Vector2i(2, 1))
-	r.resolve_turn(["sword_slash", "rest", "rest"], ["up", "rest", "rest"])
+	r.resolve_turn(["sword_rise", "rest", "rest"], ["up", "rest", "rest"])
 	check(r.fighters[1].hp == Rules.MAX_HP - 25, "싱글은 내가 먼저라 같은 단계 적 이동보다 공격이 먼저 맞음")
 
 
@@ -130,7 +130,7 @@ func _test_turn_after_passing() -> void:
 ## 같은 칸에 있는 적은 어떤 공격이든 맞는다(범위가 앞쪽만이어도).
 func _test_same_tile_attack() -> void:
 	var r = _setup(Vector2i(1, 1), Vector2i(2, 1))
-	var ev: Array = r.resolve_turn(["right", "sword_slash", "guard"], ["rest", "rest", "rest"])
+	var ev: Array = r.resolve_turn(["right", "sword_rise", "guard"], ["rest", "rest", "rest"])
 	check(ev[0].pos[0] == ev[0].pos[1], "(준비) 같은 칸")
 	check(ev[1].hits[0].hit and ev[1].hits[0].dmg == 25, "같은 칸의 적은 앞 1칸 베기에도 맞음")
 
@@ -139,7 +139,7 @@ func _test_first_mover_wins_trade() -> void:
 	var r = _setup(Vector2i(1, 1), Vector2i(2, 1))
 	r.fighters[0].hp = 10
 	r.fighters[1].hp = 10
-	var ev: Array = r.resolve_turn(["sword_slash", "rest", "rest"], ["archer_kick", "rest", "rest"])
+	var ev: Array = r.resolve_turn(["sword_rise", "rest", "rest"], ["archer_kick", "rest", "rest"])
 	check(r.winner == 0 and r.fighters[0].hp == 10, "먼저 쓰러뜨리면 상대 공격은 나가지 않음")
 	check(ev.size() == 1 and ev[0].actions.size() == 1, "승부가 나면 남은 행동·단계는 진행하지 않음")
 
@@ -162,16 +162,16 @@ func _test_step_order() -> void:
 
 func _test_guard_lasts_whole_step() -> void:
 	var r = _setup(Vector2i(1, 1), Vector2i(2, 1))
-	var ev: Array = r.resolve_turn(["sword_slash", "rest", "rest"], ["guard", "rest", "rest"])
+	var ev: Array = r.resolve_turn(["sword_rise", "rest", "rest"], ["guard", "rest", "rest"])
 	check(r.fighters[1].hp == Rules.MAX_HP - (25 - Rules.GUARD_BLOCK), "뒤 순번의 방어도 앞 순번 공격을 막음")
-	check(ev[0].actions.size() == 2 and ev[0].actions[0].cards[1] == "guard" and ev[0].actions[1].cards[0] == "sword_slash",
+	check(ev[0].actions.size() == 2 and ev[0].actions[0].cards[1] == "guard" and ev[0].actions[1].cards[0] == "sword_rise",
 		"행동 순서: 방어(단계 첫머리) → 내 공격")
 	check(ev[0].actions[1].hp[1] == ev[0].hp[1], "행동별 결과에 그때의 HP")
 
 
 func _test_selection_rules() -> void:
 	var r = Rules.new()
-	check(r.is_valid_selection(0, ["right", "sword_slash", "guard"]), "정상 선택")
+	check(r.is_valid_selection(0, ["right", "sword_rise", "guard"]), "정상 선택")
 	check(not r.is_valid_selection(0, ["right", "right", "guard"]), "중복 카드 금지")
 	r.fighters[0].mp = 50
 	check(not r.is_valid_selection(0, ["sword_thrust", "sword_spin", "right"]), "MP 초과 금지 (30+25 > 50)")
@@ -334,7 +334,7 @@ func _test_multi_enemy() -> void:
 	r.fighters[1].hp = 1
 	r.fighters[0].pos = Vector2i(2, 0)
 	r.fighters[0].facing = 1
-	ev = r.resolve_turn([["sword_slash", "rest", "guard"], ["rest", "rest", "rest"], ["left", "rest", "rest"]])
+	ev = r.resolve_turn([["sword_rise", "rest", "guard"], ["rest", "rest", "rest"], ["left", "rest", "rest"]])
 	check(ev[0].died == [1] and r.winner == -1, "하나만 쓰러지면 계속")
 	check(ev[1].cards[1] == "", "쓰러진 적은 남은 카드를 내지 않음")
 	# 같은 칸 허용: 두 적이 한 칸에 모일 수 있고, 회전베기 한 번에 둘 다 맞는다
@@ -346,7 +346,7 @@ func _test_multi_enemy() -> void:
 
 func _test_mp_regen() -> void:
 	var r = Rules.new()
-	r.resolve_turn(["right", "sword_slash", "guard"], ["rest", "guard", "right"])
+	r.resolve_turn(["right", "sword_rise", "guard"], ["rest", "guard", "right"])
 	check(r.fighters[0].mp == Rules.START_MP - 15 + Rules.MP_REGEN, "턴이 끝나면 MP 회복")
 	check(r.fighters[1].mp == mini(Rules.MAX_MP, Rules.START_MP + Rules.REST_MP + Rules.MP_REGEN), "회복은 최대치까지")
 
@@ -437,7 +437,7 @@ func _test_reward_cards_in_battle() -> void:
 	check(r.fighters[0].hp == r.fighters[0].max_hp, "치유는 최대 HP 를 넘지 않음")
 	r = _setup(Vector2i(1, 1), Vector2i(2, 1))
 	r.fighters[1].extra.assign(["iron_guard"])
-	ev = r.resolve_turn(["sword_slash", "rest", "guard"], ["iron_guard", "rest", "up"])
+	ev = r.resolve_turn(["sword_rise", "rest", "guard"], ["iron_guard", "rest", "up"])
 	check(ev[0].hits[0].dmg == 0, "철벽 방어는 30까지 막음(베기 25 → 0)")
 
 

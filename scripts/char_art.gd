@@ -20,6 +20,7 @@ const ANIMS := {
 	"guard": {"fps": 1.0, "loop": true},
 	"die": {"fps": 4.0, "loop": false},
 	# 기술별 공격 동작(카드의 anim 이름). 없으면 attack 을 그대로 쓴다 — 모든 캐릭터가 모든 기술 동작을 그릴 필요는 없다
+	"attack_rise": {"fps": 12.0, "loop": false, "fallback": "attack"},
 	"attack_thrust": {"fps": 12.0, "loop": false, "fallback": "attack"},
 	"attack_cross": {"fps": 12.0, "loop": false, "fallback": "attack"},
 	"attack_iai": {"fps": 12.0, "loop": false, "fallback": "attack"},
