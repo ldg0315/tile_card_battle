@@ -24,7 +24,9 @@ func _init() -> void:
 	_test_facing_flips_after_passing()
 	_test_facing_locked_during_turn()
 	_test_same_tile_attack()
-	_test_simultaneous_ko_is_draw()
+	_test_first_mover_wins_trade()
+	_test_step_order()
+	_test_guard_lasts_whole_step()
 	_test_selection_rules()
 	_test_ai_always_valid()
 	_test_art_file_names()
@@ -99,8 +101,11 @@ func _test_attack_and_guard() -> void:
 	check(r.fighters[1].hp == Rules.MAX_HP - (25 - Rules.GUARD_BLOCK), "HP 반영")
 	check(ev[0].mp[0] == Rules.START_MP - 15, "공격 MP 소모")
 	r = _setup(Vector2i(1, 1), Vector2i(2, 1))
+	r.resolve_turn(["up", "rest", "rest"], ["archer_kick", "rest", "rest"])
+	check(r.fighters[0].hp == Rules.MAX_HP, "먼저 움직이면 같은 단계 상대 공격을 피함")
+	r = _setup(Vector2i(1, 1), Vector2i(2, 1))
 	r.resolve_turn(["sword_slash", "rest", "rest"], ["up", "rest", "rest"])
-	check(r.fighters[1].hp == Rules.MAX_HP, "같은 단계 이동으로 회피")
+	check(r.fighters[1].hp == Rules.MAX_HP - 25, "싱글은 내가 먼저라 같은 단계 적 이동보다 공격이 먼저 맞음")
 
 
 func _test_facing_flips_after_passing() -> void:
@@ -127,13 +132,38 @@ func _test_same_tile_attack() -> void:
 	check(ev[1].hits[0].hit and ev[1].hits[0].dmg == 25, "같은 칸의 적은 앞 1칸 베기에도 맞음")
 
 
-func _test_simultaneous_ko_is_draw() -> void:
+func _test_first_mover_wins_trade() -> void:
 	var r = _setup(Vector2i(1, 1), Vector2i(2, 1))
 	r.fighters[0].hp = 10
 	r.fighters[1].hp = 10
 	var ev: Array = r.resolve_turn(["sword_slash", "rest", "rest"], ["archer_kick", "rest", "rest"])
-	check(r.winner == 2, "동시 KO 는 무승부")
-	check(ev.size() == 1, "승부가 나면 남은 단계는 진행하지 않음")
+	check(r.winner == 0 and r.fighters[0].hp == 10, "먼저 쓰러뜨리면 상대 공격은 나가지 않음")
+	check(ev.size() == 1 and ev[0].actions.size() == 1, "승부가 나면 남은 행동·단계는 진행하지 않음")
+
+
+func _test_step_order() -> void:
+	var r = Rules.new("sword", ["slime", "bat"])
+	check(r.step_order(0) == [0, 1, 2] and r.step_order(1) == [0, 1, 2], "싱글은 늘 플레이어 먼저, 적은 번호순")
+	var v = Rules.new("sword", "archer")
+	v.alternate = true
+	check(v.step_order(0) == [0, 1] and v.step_order(1) == [1, 0] and v.step_order(2) == [0, 1], "대전 1턴: 나·상대·나")
+	v.resolve_turn(["rest", "rest", "rest"], ["rest", "rest", "rest"])
+	check(v.step_order(0) == [1, 0] and v.step_order(1) == [0, 1] and v.step_order(2) == [1, 0], "대전 2턴: 상대·나·상대")
+	check(v.clone().turn_no == 1 and v.clone().alternate, "복사본(AI)도 순서 정보 유지")
+	# 대전 1턴 2단계는 상대 먼저 — 상대 공격이 내 이동보다 먼저 맞는다
+	v = _setup(Vector2i(1, 1), Vector2i(2, 1))
+	v.alternate = true
+	v.resolve_turn(["rest", "up", "rest"], ["rest", "archer_kick", "rest"])
+	check(v.fighters[0].hp == Rules.MAX_HP - 10, "대전: 상대가 먼저인 단계엔 내 이동보다 상대 공격이 먼저")
+
+
+func _test_guard_lasts_whole_step() -> void:
+	var r = _setup(Vector2i(1, 1), Vector2i(2, 1))
+	var ev: Array = r.resolve_turn(["sword_slash", "rest", "rest"], ["guard", "rest", "rest"])
+	check(r.fighters[1].hp == Rules.MAX_HP - (25 - Rules.GUARD_BLOCK), "뒤 순번의 방어도 앞 순번 공격을 막음")
+	check(ev[0].actions.size() == 2 and ev[0].actions[0].cards[1] == "guard" and ev[0].actions[1].cards[0] == "sword_slash",
+		"행동 순서: 방어(단계 첫머리) → 내 공격")
+	check(ev[0].actions[1].hp[1] == ev[0].hp[1], "행동별 결과에 그때의 HP")
 
 
 func _test_selection_rules() -> void:

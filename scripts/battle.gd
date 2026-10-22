@@ -14,6 +14,7 @@ const PropArt := preload("res://scripts/prop_art.gd")
 const PixelArt := preload("res://scripts/pixel_art.gd")
 const SlashShader := preload("res://shaders/slash_ring.gdshader")
 const Minimap := preload("res://scripts/minimap.gd")
+const RangeIcon := preload("res://scripts/range_icon.gd")
 
 const TILE := 2.0
 const SPRITE_PX := 0.09  # 발사체 도트 크기
@@ -43,6 +44,8 @@ const CARD_ACCENT := {
 const FP_SPIN_CAMERA := true
 const SPIN_TIME := 0.45
 const ORDER_MARK := ["①", "②", "③"]
+const MOVE_W := 92  # 손패 이동 버튼 폭
+const UTIL_W := 128  # 손패 방어·기 모으기·회복 버튼 폭
 const ATTACK_SFX := {"lunge": "slash", "thrust": "thrust", "spin": "spin", "jump": "jump",
 	"arrow": "arrow", "volley": "volley", "wave": "wave"}
 const REST_TIME := 0.8  # 기 모으기 연출 길이
@@ -117,6 +120,7 @@ var compact_cards := false  # 손패가 많아 카드 폭을 줄였으면 카드
 var view_button: Button
 var peek_label: Label
 var warn_label: Label
+var step_label: Label  # 실행 중 "2단계 · 상대 먼저" — 지금 몇 번째 카드끼리 겨루는지
 var hurt_flash: ColorRect
 var compass_label: Label
 var fp_act_label: Label
@@ -467,6 +471,9 @@ func _build_ui() -> void:
 	peek_label = _overlay_label(root, 92, Color(1, 0.9, 0.5))
 	# 보스 대기술 예고. 패턴을 읽고 피하는 게 보스전의 핵심이라 로그만이 아니라 화면에 크게 띄운다
 	warn_label = _overlay_label(root, 128, Color(1, 0.45, 0.35))
+	# 위쪽 가운데(양쪽 HP 칸 사이)는 비어 있고 판·캐릭터를 가리지 않는다
+	step_label = _overlay_label(root, 22, Color(1, 1, 1))
+	step_label.add_theme_font_size_override("font_size", 26)
 	# 1인칭에선 카메라가 적을 보느라 몸 방향과 어긋날 수 있어서, 카드의 "앞"이 어느 쪽인지 따로 알려준다
 	compass_label = _overlay_label(root, 0, Color(0.9, 0.95, 1.0))
 	compass_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
@@ -650,40 +657,56 @@ func _build_hand() -> void:
 	for c in hand_box.get_children():
 		c.queue_free()
 	card_buttons.clear()
-	# 이동 카드(1칸·2칸 × 4방향)는 작은 버튼 4×2 묶음으로 — 카드가 13장이라 한 줄로 늘어놓으면 화면을 넘친다
-	var moves := GridContainer.new()
-	moves.columns = 4
-	moves.add_theme_constant_override("h_separation", 4)
-	moves.add_theme_constant_override("v_separation", 4)
-	hand_box.add_child(moves)
-	var big := 0
+	# 손패를 종류별 세 묶음으로 나눈다: 이동(4×2 작은 버튼) | 방어·기 모으기·회복(2열 작은 버튼) | 공격(큰 카드 + 범위 그림).
+	# 한 줄로 늘어놓던 때는 보상으로 카드가 늘수록 폭이 줄어 글씨가 잘리고 무엇이 공격인지 한눈에 안 들어왔다.
+	# 실제로 고민하는 건 공격 카드뿐이라, 나머지는 작게 접고 공격 카드에 폭을 몰아준다.
+	var moves := _hand_group(4)
+	hand_box.add_child(VSeparator.new())
+	var utils := _hand_group(2)
+	var attacks := 0
 	for id: String in rules.hand(0):
-		big += 0 if Cards.get_card(id).type == "move" else 1
-	# 보상으로 카드가 늘면 한 줄에 다 들어가도록 폭을 계산한다(화면 1280 - 여백, 이동 버튼 묶음 몫을 빼고 나눔)
-	var move_w := 96 if big <= 6 else 76
-	var room := 1280 - 40 - (move_w * 4 + 12) - 8 * (big + 1)
-	var big_w := clampi(room / maxi(big, 1), 70, 118)
+		attacks += 1 if Cards.get_card(id).type == "attack" else 0
+	# 화면 1280 에서 여백·이동 묶음(4×92)·보조 묶음(2×128)·구분선 몫을 빼고 공격 카드끼리 나눈다
+	var room := 1280 - 40 - (MOVE_W * 4 + 12) - (UTIL_W * 2 + 4) - 40 - 8 * attacks
+	var big_w := clampi(room / maxi(attacks, 1), 84, 130)
 	compact_cards = big_w < 118
+	if attacks > 0:
+		hand_box.add_child(VSeparator.new())
 	for id: String in rules.hand(0):
 		var card: Dictionary = Cards.get_card(id)
 		var b := Button.new()
-		b.text = _card_text(card)
 		b.focus_mode = Control.FOCUS_NONE
-		b.clip_text = compact_cards  # 폭을 줄였을 때만 — 보통 폭에선 자르면 "MP 15" 의 숫자가 잘렸다
 		_style_button(b, CARD_ACCENT[card.type])
 		b.pressed.connect(_on_card_pressed.bind(id))
 		b.mouse_entered.connect(_preview.bind(id))
 		b.mouse_exited.connect(_end_preview)
-		if card.type == "move":
-			b.custom_minimum_size = Vector2(move_w, 35)
-			b.add_theme_font_size_override("font_size", 14 if move_w >= 96 else 12)
-			moves.add_child(b)
-		else:
-			b.custom_minimum_size = Vector2(big_w, 74)
-			if big_w < 118:
-				b.add_theme_font_size_override("font_size", 13 if big_w >= 90 else 12)
-			hand_box.add_child(b)
+		match card.type:
+			"move":
+				b.custom_minimum_size = Vector2(MOVE_W, 35)
+				b.add_theme_font_size_override("font_size", 14)
+				moves.add_child(b)
+			"attack":
+				b.custom_minimum_size = Vector2(big_w, 74)
+				b.clip_text = compact_cards  # 폭을 줄였을 때만 — 보통 폭에선 자르면 "MP 15" 의 숫자가 잘렸다
+				b.add_theme_font_size_override("font_size", 14 if not compact_cards else 12)
+				b.icon = RangeIcon.make(card, 8)
+				b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+				b.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
+				hand_box.add_child(b)
+			_:
+				b.custom_minimum_size = Vector2(UTIL_W, 35)
+				b.add_theme_font_size_override("font_size", 13)
+				utils.add_child(b)
 		card_buttons[id] = b
+
+
+func _hand_group(columns: int) -> GridContainer:
+	var g := GridContainer.new()
+	g.columns = columns
+	g.add_theme_constant_override("h_separation", 4)
+	g.add_theme_constant_override("v_separation", 4)
+	hand_box.add_child(g)
+	return g
 
 
 ## 카드 종류별 테두리 색. 기본 테마 버튼은 어두운 배경에서 글자만 떠 보여서 카드처럼 보이지 않는다.
@@ -692,34 +715,19 @@ func _style_button(b: Button, accent: Color) -> void:
 
 
 func _card_text(card: Dictionary) -> String:
-	if compact_cards:
-		return _card_text_short(card)
-	if card.type == "move":
-		return card.name if card.cost == 0 else "%s · MP %d" % [card.name, card.cost]
-	if card.type == "guard":
-		var block: int = card.get("block", Rules.GUARD_BLOCK)
-		return "%s\n받는 피해 -%d%s" % [card.name, block, " · MP %d" % card.cost if card.cost > 0 else ""]
-	if card.type == "heal":
-		return "%s\nHP +%d · MP %d" % [card.name, card.heal, card.cost]
-	if card.type == "rest":
-		return "기 모으기\nMP +%d" % Rules.REST_MP
-	return "%s\n피해 %d · MP %d" % [card.name, card.dmg, card.cost]
-
-
-## 손패가 많을 때의 짧은 표기: 숫자만(피해/회복/막는 양 · MP).
-func _card_text_short(card: Dictionary) -> String:
 	match card.type:
+		# 이동·보조 카드는 작은 한 줄 버튼이라 숫자만 붙인다
 		"move":
-			# "← 왼쪽" 은 좁은 버튼에서 잘려서, 화살표 + 칸 수로(1칸 / 2칸·MP)
-			var arrow: String = card.name.split(" ")[0]
-			return "%s 1칸" % arrow if card.cost == 0 else "%s 2칸·%d" % [arrow, card.cost]
+			return card.name if card.cost == 0 else "%s ·MP%d" % [card.name, card.cost]
 		"guard":
-			return "%s\n-%d%s" % [card.name, card.get("block", Rules.GUARD_BLOCK), " ·MP%d" % card.cost if card.cost > 0 else ""]
+			return "%s -%d%s" % [card.name, card.get("block", Rules.GUARD_BLOCK), " ·MP%d" % card.cost if card.cost > 0 else ""]
 		"rest":
-			return "기 모으기\n+%d" % Rules.REST_MP
+			return "기 모으기 +%d" % Rules.REST_MP
 		"heal":
-			return "%s\n+%d ·MP%d" % [card.name, card.heal, card.cost]
-	return "%s\n%d ·MP%d" % [card.name, card.dmg, card.cost]
+			return "%s +%d ·MP%d" % [card.name, card.heal, card.cost]
+	if compact_cards:
+		return "%s\n%d ·MP%d" % [card.name, card.dmg, card.cost]
+	return "%s\n피해 %d · MP %d" % [card.name, card.dmg, card.cost]
 
 
 # ---------------------------------------------------------------- 진행
@@ -728,6 +736,8 @@ func _card_text_short(card: Dictionary) -> String:
 func _new_game() -> void:
 	var cfg: Dictionary = Game.battle_config()
 	rules = Rules.new(cfg.player, cfg.enemies)
+	# 싱글은 늘 플레이어가 먼저 행동하고, 대전은 단계마다 먼저 움직이는 쪽을 번갈아 공평하게
+	rules.alternate = Game.mode == "versus"
 	rules.fighters[0].extra.assign(cfg.extra_cards)  # 이번 던전에서 보상으로 얻은 카드
 	rules.fighters[0].max_hp += cfg.max_hp_bonus
 	rules.fighters[0].hp = cfg.player_hp if cfg.player_hp >= 0 else rules.fighters[0].max_hp
@@ -777,6 +787,10 @@ func _new_game() -> void:
 			" (보스)" if st.get("boss", false) else "", ", ".join(names)])
 	_log("카드 3장을 순서대로 고르고 [b]실행[/b]을 누르세요.\n카드에 마우스를 올리면 범위가 노랗게 보입니다.")
 	_log("이동 카드는 화면 기준(←→↑↓)이고 다른 캐릭터에 막히지 않습니다(같은 칸 가능). 공격은 카드를 고를 때 바라보는 방향(발밑 화살표)으로 그 턴 내내 나가고, 턴이 끝나면 가장 가까운 적을 향해 돌아섭니다. 같은 칸의 적은 어떤 공격에도 맞습니다. MP 는 턴마다 %d 회복합니다." % Rules.MP_REGEN)
+	if rules.alternate:
+		_log("같은 단계의 카드는 한 명씩 차례로 나갑니다. 단계마다 먼저 움직이는 쪽이 번갈아 바뀌니 카드 칸의 [b][선][/b]·[b][후][/b]를 보고 고르세요. 방어는 순서와 상관없이 그 단계 내내 걸립니다.")
+	else:
+		_log("같은 단계의 카드는 [b]내가 먼저[/b], 그다음 적이 차례로 나갑니다. 방어는 순서와 상관없이 그 단계 내내 걸립니다.")
 	_log("[b]V[/b]: 1인칭(적이 여럿이면 [b]Tab[/b]으로 볼 적 전환). 바라보는 적이 2칸 이내면 카드를 엿볼 수 있습니다.")
 	_log("1인칭에선 왼쪽 위 [b]미니맵[/b]에 고른 카드의 예상 경로가 나옵니다. [b]Space[/b]를 누르는 동안 3인칭, [b]M[/b]은 미니맵 켜기·끄기, [b]L[/b]은 이 기록 창.")
 	result_panel.hide()
@@ -830,7 +844,7 @@ func _refresh_hand() -> void:
 	var used: int = rules.cost_of(selected)
 	var names := PackedStringArray()
 	for k in Rules.CARDS_PER_TURN:
-		names.append("%d) %s" % [k + 1, Cards.get_card(selected[k]).name if k < selected.size() else "—"])
+		names.append("%d)%s %s" % [k + 1, _initiative_mark(k), Cards.get_card(selected[k]).name if k < selected.size() else "—"])
 	slot_label.text = "   ".join(names) + "        MP 사용 %d / %d" % [used, mp]
 	if selected.is_empty() and not busy:
 		slot_label.text += "    (고른 카드를 다시 누르면 해제)"
@@ -848,6 +862,19 @@ func _refresh_hand() -> void:
 		b.text = ("%s " % ORDER_MARK[order] if order != -1 else "") + _card_text(Cards.get_card(id))
 		b.modulate = Color(1.0, 0.85, 0.35) if order != -1 else Color.WHITE
 	go_button.disabled = busy or not full
+
+
+## 대전에서 k 번째 단계에 내가 먼저면 "선", 나중이면 "후". 싱글은 늘 내가 먼저라 표시하지 않는다.
+func _initiative_mark(k: int) -> String:
+	if not rules.alternate:
+		return ""
+	return "[선]" if rules.step_order(k)[0] == 0 else "[후]"
+
+
+func _show_step_banner(ev: Dictionary) -> void:
+	var first: int = ev.order[0]
+	step_label.text = "%d단계 · %s 먼저" % [ev.step + 1, "나" if first == 0 else _who(first)]
+	step_label.show()
 
 
 ## 카드를 누르면 다음 순번으로 들어가고, 이미 고른 카드를 다시 누르면 빠진다(뒤 순번은 앞으로 당겨진다).
@@ -890,12 +917,18 @@ func _on_go() -> void:
 	_log("\n[b]— %d턴 —[/b]" % turn)
 	var events: Array = rules.resolve_turn(plans)
 	for ev: Dictionary in events:
-		await _play_step(ev)
+		_show_step_banner(ev)
+		for act: Dictionary in ev.actions:
+			await _play_step(act)
+	step_label.hide()
 	# 턴이 끝나면 규칙대로 모두 가장 가까운 적을 향해 돌아선다 — 다음 턴 미리보기는 이 방향 기준
 	for i in rules.fighters.size():
 		step_facing[i] = rules.fighters[i].facing
 		sprites[i].flip_h = step_facing[i] < 0
 		_update_mark(i)
+		if not gone[i]:
+			sprites[i].modulate = Color.WHITE
+			sprites[i].play("idle")
 	busy = false
 	if rules.winner != -1:
 		_show_result()
@@ -956,11 +989,17 @@ func _show_result() -> void:
 			# 스테이지 보상: 셋 중 하나를 골라야 다음으로 넘어간다
 			result_label.text = "승리!  보상을 하나 고르세요"
 			for opt: Dictionary in Game.reward_options(rng):
-				_result_button("%s\n%s" % [opt.name, opt.desc], Color(0.55, 0.85, 0.6) if opt.kind == "card" else Color(0.95, 0.8, 0.3),
+				var rb := _result_button("%s\n%s" % [opt.name, opt.desc], Color(0.55, 0.85, 0.6) if opt.kind == "card" else Color(0.95, 0.8, 0.3),
 					func() -> void:
 						Game.on_single_won(rules.fighters[0].hp)
 						Game.take_reward(opt)
-						Game.goto_map(), Vector2(200, 64))
+						Game.goto_map(), Vector2(210, 64))
+				# 새 기술은 범위를 그림으로 미리 보여준다 — 고른 뒤에야 "앞 3칸 한 칸만"인 걸 알게 되면 보상 선택이 운이 된다
+				if opt.kind == "card" and Cards.get_card(opt.id).type == "attack":
+					rb.icon = RangeIcon.make(Cards.get_card(opt.id), 12)
+					rb.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+					rb.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
+					rb.custom_minimum_size.y = 108
 		else:
 			# 무승부도 패배로 친다 — 보스와 맞교환으로 끝났는데 다음으로 넘어가면 허무하다
 			_result_button("처음부터 다시", Color(0.95, 0.8, 0.3), func() -> void:
@@ -972,7 +1011,7 @@ func _show_result() -> void:
 	result_panel.show()
 
 
-func _result_button(text: String, accent: Color, action: Callable, size := Vector2(150, 40)) -> void:
+func _result_button(text: String, accent: Color, action: Callable, size := Vector2(150, 40)) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.custom_minimum_size = size
@@ -980,6 +1019,7 @@ func _result_button(text: String, accent: Color, action: Callable, size := Vecto
 	b.pressed.connect(Sound.play.bind("click"))
 	b.pressed.connect(action)
 	result_buttons.add_child(b)
+	return b
 
 
 # ---------------------------------------------------------------- 시점·엿보기
@@ -1284,9 +1324,7 @@ func _stand(t: Vector2i, i := -1) -> Vector3:
 	return _world(t) + Vector3(0, sprite_half[i] if i >= 0 else SPRITE_Y, 0)
 
 
-## 규칙은 동시 판정 그대로 두고, 보여주는 것만 "이동 → 방어·기 모으기 → 공격 → 쓰러짐" 순서로,
-## 같은 순서 안에서는 나 → 적 차례로 한 명씩 보여준다. 여럿이 한꺼번에 움직이면 산만해서 무엇이 일어났는지 읽기 어렵다.
-## 규칙 자체를 순차로 바꾸지 않은 이유: 먼저 처리되는 쪽이 늘 유리해져 동시 선택의 심리전이 깨진다.
+## 행동 하나(규칙의 actions 한 칸)를 연출한다. 보통 한 명의 카드만 들어 있고, 단계 첫머리의 방어는 여럿이 함께 들어 있다.
 func _play_step(ev: Dictionary) -> void:
 	var n: int = rules.fighters.size()
 	var cards := []
@@ -1368,9 +1406,10 @@ func _play_step(ev: Dictionary) -> void:
 		card_tags[i].hide()
 		if ev.hp[i] <= 0:
 			continue  # 쓰러진 쪽은 페이드아웃 중이라 건드리지 않는다
-		sprites[i].modulate = Color.WHITE
+		# 방어는 단계 내내 걸리니, 그 단계의 다른 행동을 보여주는 동안에도 방어 자세를 유지한다
+		sprites[i].modulate = Color(0.6, 0.8, 1.0) if ev.guarding[i] else Color.WHITE
 		_tween().tween_property(sprites[i], "scale", Vector3.ONE, 0.1)
-		sprites[i].play("idle")
+		sprites[i].play("guard" if ev.guarding[i] else "idle")
 		# 연출이 겹쳐 조금 어긋났더라도 다음 단계는 정확한 칸에서 시작
 		if motion[i] and motion[i].is_valid():
 			motion[i].kill()
@@ -2143,6 +2182,7 @@ func _log(text: String) -> void:
 func _handle_debug_args() -> void:
 	var shot := ""
 	var auto := false
+	var reward_shot := false  # --reward: 이긴 것으로 치고 결과(보상 선택) 화면을 찍는다
 	var hand: Array = rules.hand(0)
 	var mine: Array = ["right", hand[Cards.COMMON.size()], "guard"]  # 오른쪽 + 첫 공격 + 방어 (캐릭터와 무관하게 유효)
 	var mids: Array[float] = [0.75]
@@ -2178,6 +2218,8 @@ func _handle_debug_args() -> void:
 		elif a.begins_with("--ai="):
 			debug_ai = Array(a.substr(5).split(","))
 			_plan_enemies()
+		elif a == "--reward":
+			reward_shot = true
 		elif a.begins_with("--mid="):
 			mids.clear()
 			for m in a.substr(6).split(","):
@@ -2206,6 +2248,10 @@ func _handle_debug_args() -> void:
 		while busy:
 			await get_tree().process_frame
 		await get_tree().create_timer(0.2).timeout
+	if reward_shot:
+		rules.winner = 0
+		_show_result()
+		await get_tree().create_timer(0.3).timeout
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(shot)
 	get_tree().quit()

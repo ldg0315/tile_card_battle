@@ -47,6 +47,10 @@ class Fighter:
 
 var fighters: Array[Fighter] = []
 var winner := -1  # -1 진행 중, 0 플레이어 승, 1 적 승, 2 무승부
+# 한 단계 안에서는 정해진 순서대로 한 명씩 행동한다(step_order). 싱글은 늘 플레이어 먼저,
+# 대전은 alternate = true 로 단계마다 먼저 움직이는 팀을 번갈아(1턴 A·B·A, 2턴 B·A·B) 두 턴마다 3:3 이 되게.
+var alternate := false
+var turn_no := 0
 
 
 ## enemies: 적 캐릭터 id 하나(String) 또는 여럿(Array, 최대 3).
@@ -76,6 +80,8 @@ func clone():
 	for f in fighters:
 		c.fighters.append(f.copy())
 	c.winner = winner
+	c.alternate = alternate
+	c.turn_no = turn_no
 	return c
 
 
@@ -160,7 +166,19 @@ func attack_tiles(f: Fighter, card: Dictionary) -> Array[Vector2i]:
 	return out
 
 
-## 한 턴을 처리하고 단계별 이벤트를 돌려준다. 화면은 이 이벤트만 보고 연출한다.
+## step 단계에서 행동하는 순서(전투원 번호). 먼저 움직이는 팀의 전투원이 번호순으로 앞에 선다.
+## 순서를 미리 알 수 있어야 "이 단계는 상대가 먼저니 공격하면 피해진다"를 읽고 카드를 고를 수 있다.
+func step_order(step: int) -> Array[int]:
+	var first_team := (turn_no + step) % 2 if alternate else 0
+	var out: Array[int] = []
+	for team in [first_team, 1 - first_team]:
+		for i in fighters.size():
+			if fighters[i].team == team:
+				out.append(i)
+	return out
+
+
+## 한 턴을 처리하고 단계별 이벤트를 돌려준다. 화면은 각 단계의 actions(행동 하나씩의 결과)를 순서대로 연출한다.
 ## 부르는 법: resolve_turn([전투원0 카드3장, 전투원1 카드3장, …]) — 1대1 은 resolve_turn(내 카드, 적 카드) 도 된다.
 func resolve_turn(a: Array, b: Array = []) -> Array[Dictionary]:
 	var plans: Array = a if b.is_empty() and not a.is_empty() and a[0] is Array else [a, b]
@@ -172,11 +190,12 @@ func resolve_turn(a: Array, b: Array = []) -> Array[Dictionary]:
 		for i in fighters.size():
 			var plan: Array = plans[i] if i < plans.size() else []
 			ids.append(plan[step] if fighters[i].alive() and step < plan.size() else "")
-		events.append(_resolve_step(ids))
+		events.append(_resolve_step(ids, step))
 	_update_facing()
 	for f in fighters:
 		if f.alive():
 			f.mp = mini(MAX_MP, f.mp + MP_REGEN)
+	turn_no += 1
 	return events
 
 
@@ -187,92 +206,107 @@ static func _filled(n: int, v) -> Array:
 	return arr
 
 
-func _resolve_step(ids: Array) -> Dictionary:
+## 한 단계. 반환하는 이벤트의 hits·died·pos 등은 단계 전체의 결과이고, actions 에 행동 하나씩의 결과가 순서대로 들어 있다.
+## 예전엔 이동 → 방어 → 공격을 모두 동시에 처리했는데, 같은 단계의 상대 이동이 내 공격보다 먼저 보여서
+## "내 차례에 상대가 먼저 움직였다"로 읽혔다. 카드를 낸 순서대로 한 명씩 처리하는 쪽이 직관과 맞는다.
+func _resolve_step(ids: Array, step: int) -> Dictionary:
 	var n := fighters.size()
 	var cards := []
 	for i in n:
 		cards.append(Cards.get_card(ids[i]) if ids[i] != "" else {})
-	var ev := {"cards": ids, "hits": [], "fizzled": _filled(n, false), "guarding": _filled(n, false), "died": [],
-		"healed": _filled(n, 0)}
+	var ev := {"cards": ids, "step": step, "order": step_order(step), "hits": [], "fizzled": _filled(n, false),
+		"guarding": _filled(n, false), "died": [], "healed": _filled(n, 0), "actions": []}
 	var block_of := _filled(n, 0)  # 이번 단계 방어량(철벽 방어는 더 많이 막는다)
 
-	# 1) 이동을 공격보다 먼저 처리한다 — 같은 단계에서 "피하는" 카드가 의미를 가지려면 이동이 선행해야 한다.
-	#    전투원끼리는 막지 않는다(같은 칸 허용). 막는 규칙은 "왜 안 움직였나"를 읽기 어렵게 만들었다
+	# 1) 방어만은 순서와 상관없이 단계 내내 걸린다 — 순서대로 처리하면 뒤 순번의 방어는
+	#    먼저 들어온 공격을 하나도 못 막아, 싱글에서 몬스터의 방어가 아무 의미가 없어진다.
+	var guard_ids := _filled(n, "")
 	for i in n:
-		if cards[i].get("type", "") == "move":
-			# 이동도 비용이 있으면(2칸 이동) 여기서 낸다. 모자라면 공격과 같이 헛돈다
-			var cost := int(cards[i].cost)
-			if fighters[i].mp < cost:
-				ev.fizzled[i] = true
-				continue
-			fighters[i].mp -= cost
-			fighters[i].pos = move_target(fighters[i], cards[i].dir)
-	# 방향은 턴 도중에 바꾸지 않는다(턴 끝에만 _update_facing). 공격은 바라보는 쪽으로 나가니,
-	# 턴 중에 돌아서면 카드를 고를 때 본 범위와 실제 범위가 달라진다 — 특히 적이 넘어가는 경우는 미리 알 수도 없다
-
-	# 2) 방어·기 모으기·치유
-	for i in n:
-		var type: String = cards[i].get("type", "")
-		if type in ["guard", "heal"]:
-			var cost := int(cards[i].get("cost", 0))
-			if fighters[i].mp < cost:
-				ev.fizzled[i] = true
-				continue
-			fighters[i].mp -= cost
-		match type:
-			"guard":
-				ev.guarding[i] = true
-				block_of[i] = int(cards[i].get("block", GUARD_BLOCK))
-			"rest":
-				fighters[i].mp = mini(MAX_MP, fighters[i].mp + REST_MP)
-			"heal":
-				var before := fighters[i].hp
-				fighters[i].hp = mini(fighters[i].max_hp, fighters[i].hp + int(cards[i].heal))
-				ev.healed[i] = fighters[i].hp - before
-
-	# 3) 공격은 동시 판정. 데미지를 모았다가 마지막에 적용해야
-	#    같은 단계에서 먼저 처리된 쪽 때문에 상대 공격이 사라지는 일이 없다(맞교환 → 무승부 가능).
-	#    범위 안의 적은 전부 맞는다 — 둘이 붙어 있으면 범위 공격 한 번에 둘 다.
-	var dmg := _filled(n, 0)
-	for i in n:
-		if cards[i].get("type", "") != "attack":
+		if cards[i].get("type", "") != "guard":
 			continue
-		var f := fighters[i]
-		if f.mp < int(cards[i].cost):
+		guard_ids[i] = ids[i]
+		var cost := int(cards[i].get("cost", 0))
+		if fighters[i].mp < cost:
 			ev.fizzled[i] = true
 			continue
-		f.mp -= int(cards[i].cost)
-		var tiles := attack_tiles(f, cards[i])
-		var targets := []
-		for j in foes_of(i):
-			var foe := fighters[j]
-			# 같은 칸에 있는 적은 어떤 공격이든 맞는다 — 범위는 모두 "앞 몇 칸"이라 이게 없으면 같은 칸이 안전지대가 된다
-			if not tiles.has(foe.pos) and foe.pos != f.pos:
-				continue
-			var d := maxi(0, int(cards[i].dmg) - block_of[j])
-			dmg[j] += d
-			targets.append({"to": j, "dmg": d})
-		var first: Dictionary = targets[0] if not targets.is_empty() else {}
-		ev.hits.append({"from": i, "tiles": tiles, "targets": targets, "hit": not targets.is_empty(),
-			"dmg": first.get("dmg", 0)})
-	for j in n:
-		if not fighters[j].alive():
-			continue
-		fighters[j].hp = maxi(0, fighters[j].hp - dmg[j])
-		if not fighters[j].alive():
-			ev.died.append(j)
+		fighters[i].mp -= cost
+		ev.guarding[i] = true
+		block_of[i] = int(cards[i].get("block", GUARD_BLOCK))
+	if guard_ids.any(func(id: String) -> bool: return id != ""):
+		ev.actions.append(_snapshot(ev, guard_ids, [], []))
 
-	ev.pos = []
-	ev.facing = []
-	ev.hp = []
-	ev.mp = []
-	for f in fighters:
-		ev.pos.append(f.pos)
-		ev.facing.append(f.facing)
-		ev.hp.append(f.hp)
-		ev.mp.append(f.mp)
+	# 2) 나머지는 순서대로 한 명씩. 앞 사람의 행동(이동·피해)이 바로 반영되고, 그 전에 쓰러지면 카드를 내지 못한다
+	for i: int in ev.order:
+		var type: String = cards[i].get("type", "")
+		if type == "" or type == "guard" or not fighters[i].alive():
+			continue
+		var act_ids := _filled(n, "")
+		act_ids[i] = ids[i]
+		var hits := []
+		var died := []
+		var f := fighters[i]
+		# 이동(2칸)·치유·공격은 비용을 행동할 때 낸다. 모자라면 헛돈다
+		if f.mp < int(cards[i].get("cost", 0)):
+			ev.fizzled[i] = true
+		else:
+			f.mp -= int(cards[i].get("cost", 0))
+			match type:
+				"move":
+					# 전투원끼리는 막지 않는다(같은 칸 허용). 막는 규칙은 "왜 안 움직였나"를 읽기 어렵게 만들었다.
+					# 방향은 턴 도중에 바꾸지 않는다(턴 끝에만 _update_facing) — 고를 때 본 공격 범위가 실제와 같게
+					f.pos = move_target(f, cards[i].dir)
+				"rest":
+					f.mp = mini(MAX_MP, f.mp + REST_MP)
+				"heal":
+					var before := f.hp
+					f.hp = mini(f.max_hp, f.hp + int(cards[i].heal))
+					ev.healed[i] = f.hp - before
+				"attack":
+					# 범위 안의 적은 전부 맞는다 — 둘이 붙어 있으면 범위 공격 한 번에 둘 다
+					var tiles := attack_tiles(f, cards[i])
+					var targets := []
+					for j in foes_of(i):
+						var foe := fighters[j]
+						# 같은 칸에 있는 적은 어떤 공격이든 맞는다 — 범위는 모두 "앞 몇 칸"이라 이게 없으면 같은 칸이 안전지대가 된다
+						if not tiles.has(foe.pos) and foe.pos != f.pos:
+							continue
+						var d := maxi(0, int(cards[i].dmg) - block_of[j])
+						foe.hp = maxi(0, foe.hp - d)
+						targets.append({"to": j, "dmg": d})
+						if not foe.alive():
+							died.append(j)
+					var first: Dictionary = targets[0] if not targets.is_empty() else {}
+					hits.append({"from": i, "tiles": tiles, "targets": targets, "hit": not targets.is_empty(),
+						"dmg": first.get("dmg", 0)})
+		ev.hits.append_array(hits)
+		ev.died.append_array(died)
+		ev.actions.append(_snapshot(ev, act_ids, hits, died))
+		_check_winner()
+		if winner != -1:
+			break
+
+	ev.merge(_state())
 	_check_winner()
 	return ev
+
+
+## 지금 모두의 자리·방향·HP·MP.
+func _state() -> Dictionary:
+	var st := {"pos": [], "facing": [], "hp": [], "mp": []}
+	for f in fighters:
+		st.pos.append(f.pos)
+		st.facing.append(f.facing)
+		st.hp.append(f.hp)
+		st.mp.append(f.mp)
+	return st
+
+
+## 행동 하나의 결과. 단계 이벤트와 같은 모양이라 화면은 행동마다 같은 연출 함수를 쓸 수 있다.
+func _snapshot(ev: Dictionary, ids: Array, hits: Array, died: Array) -> Dictionary:
+	var a := {"cards": ids, "step": ev.step, "hits": hits, "died": died, "fizzled": ev.fizzled.duplicate(),
+		"guarding": ev.guarding.duplicate(), "healed": ev.healed.duplicate()}
+	a.merge(_state())
+	return a
 
 
 ## 턴이 끝나면 모두 가장 가까운 적 쪽으로 돌아선다. 다음 턴 카드는 이 방향을 기준으로 고른다.
