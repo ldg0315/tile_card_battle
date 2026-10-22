@@ -44,6 +44,7 @@ const CARD_ACCENT := {
 const FP_SPIN_CAMERA := true
 const SPIN_TIME := 0.45
 const ORDER_MARK := ["①", "②", "③"]
+const BLADE_GLOW := Color(0.55, 0.8, 1.0)  # 검광 바깥 빛(칼날의 서늘한 푸른빛). 1·3인칭 같은 색
 const FREE_LOOK_EDGE := 90.0  # 자유 시점: 이 폭(px)의 좌우 가장자리 띠에 커서가 있으면 돈다
 const FREE_LOOK_BOTTOM := 190.0  # 화면 아래 이만큼(카드 패널 + 조작 안내 줄)은 가장자리로 치지 않는다
 const FREE_LOOK_SPEED := 2.2  # 최고 회전 속도(라디안/초)
@@ -1389,84 +1390,174 @@ func _fp_attack_fx(card: Dictionary) -> void:
 			vm.tween_property(viewmodel, "rotation_degrees", 0.0, 0.3)
 			vm.parallel().tween_property(self, "vm_offset", Vector2.ZERO, 0.3)
 		"spin":
-			# 무기가 화면 오른쪽에서 왼쪽 끝까지 가로로 쓸고, 카메라가 한 바퀴 돈다
-			vm.tween_property(viewmodel, "rotation_degrees", -80.0, 0.06)
-			vm.tween_property(self, "vm_offset", Vector2(-760, -40), SPIN_TIME * 0.6)
-			vm.tween_property(viewmodel, "rotation_degrees", 0.0, 0.15)
-			vm.parallel().tween_property(self, "vm_offset", Vector2.ZERO, 0.2)
+			# 칼끝이 화면 오른쪽에서 왼쪽 끝까지 가로로 쓸고(검광), 카메라가 한 바퀴 돈다
+			vm.kill()  # 칼 움직임은 _fp_swings 가 맡는다(빈 트윈으로 두면 엔진 오류)
+			_fp_swings([["spin", 0.04, SPIN_TIME * 0.5]])
 			if FP_SPIN_CAMERA:
 				var cs := _tween()
 				cs.tween_property(self, "fp_spin", TAU, SPIN_TIME).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 				cs.tween_callback(func() -> void: fp_spin = 0.0)
 		"rise":
-			# 칼을 화면 아래로 내렸다가 위로 쳐올린다. 몸이 뛰어오르니 카메라는 저절로 솟고(_rise),
-			# 시선도 위로 들었다 내려와 "올려 벤다"는 게 1인칭에서도 느껴지게
-			vm.tween_property(self, "vm_offset", Vector2(-40, 160), 0.1)
-			vm.parallel().tween_property(viewmodel, "rotation_degrees", 30.0, 0.1)
-			vm.tween_property(self, "vm_offset", Vector2(-180, -230), 0.12).set_ease(Tween.EASE_OUT)
-			vm.parallel().tween_property(viewmodel, "rotation_degrees", -40.0, 0.12)
-			vm.tween_interval(0.1)
-			vm.tween_property(self, "vm_offset", Vector2.ZERO, 0.25)
-			vm.parallel().tween_property(viewmodel, "rotation_degrees", 0.0, 0.25)
+			# 칼이 오른쪽 아래에서 왼쪽 위로 크게 호를 그리며 쳐올라간다.
+			# 몸이 뛰어오르니 카메라는 저절로 솟고(_rise), 시선도 위로 들었다 내려온다
+			vm.kill()
+			_fp_swings([["rise", 0.1, 0.13]])
 			var pt := _tween()
 			pt.tween_interval(0.1)
 			pt.tween_property(self, "fp_pitch", 1.6, 0.16).set_ease(Tween.EASE_OUT)
 			pt.tween_interval(0.12)
 			pt.tween_property(self, "fp_pitch", 0.0, 0.25).set_ease(Tween.EASE_IN_OUT)
-			var c := ui_root.size / 2.0 + Vector2(-60, 0)
-			var pts := []
-			for k in 14:
-				var a := lerpf(PI * 0.62, PI * 1.38, k / 13.0)  # 왼쪽 아래 → 위로 휘어 오른쪽 위
-				pts.append(c + Vector2(cos(a) * -260.0 + 60.0, sin(a) * -260.0 * -1.0))
-			_screen_line(pts, 22.0, 0.12)
 		"cross":
-			# 칼을 치켜들었다 곧게 내려치고(세로 궤적), 이어서 가로로 쓴다(가로 궤적)
-			vm.tween_property(viewmodel, "rotation_degrees", 25.0, 0.1)
-			vm.parallel().tween_property(self, "vm_offset", Vector2(-60, -150), 0.1)
-			vm.tween_property(viewmodel, "rotation_degrees", -10.0, 0.07)
-			vm.parallel().tween_property(self, "vm_offset", Vector2(-80, 90), 0.07)
-			vm.tween_property(viewmodel, "rotation_degrees", -65.0, 0.08)
-			vm.parallel().tween_property(self, "vm_offset", Vector2(-160, 20), 0.08)
-			vm.tween_property(viewmodel, "rotation_degrees", 0.0, 0.22)
-			vm.parallel().tween_property(self, "vm_offset", Vector2.ZERO, 0.22)
-			var c := ui_root.size / 2.0 + Vector2(-120, -40)
-			_screen_line([c + Vector2(0, -230), c + Vector2(0, 200)], 22.0, 0.15)
-			_tween().tween_callback(_slash_fx.bind(false)).set_delay(0.25)
+			# 위에서 곧게 내려치고(세로 검광), 이어서 오른쪽에서 왼쪽으로 가로베기(가로 검광) — 3인칭 타이밍과 같게
+			vm.kill()
+			_fp_swings([["cross_v", 0.1, 0.08], ["cross_h", 0.07, 0.09]])
 		"iai":
-			# 칼을 허리로 내려 모았다가(화면 아래로), 한순간에 가로로 휘두르고 한 박자 뒤 화면을 가르는 섬광
-			vm.tween_property(self, "vm_offset", Vector2(80, 120), 0.3)
-			vm.tween_property(viewmodel, "rotation_degrees", -85.0, 0.04)
-			vm.parallel().tween_property(self, "vm_offset", Vector2(-420, -30), 0.04)
-			vm.tween_interval(0.25)
-			vm.tween_property(viewmodel, "rotation_degrees", 0.0, 0.25)
-			vm.parallel().tween_property(self, "vm_offset", Vector2.ZERO, 0.25)
+			# 칼을 허리로 내려 모았다가(0.3초), 한순간에 가로로 뽑아 베고, 한 박자 뒤 같은 자리에 섬광이 다시 그어진다
+			vm.kill()
+			_fp_swings([["iai", 0.32, 0.05]], 0.25, 0.45)
+			_fp_flash("iai", 0.52)
 			var ft := _tween()
 			ft.tween_interval(0.34)
 			ft.tween_callback(func() -> void: fov_kick = -9.0)
 			ft.tween_property(self, "fov_kick", 0.0, 0.4)
-			var y := ui_root.size.y / 2.0 - 60.0
-			_screen_line([Vector2(0, y + 20), Vector2(ui_root.size.x, y - 20)], 6.0, 0.52, 0.5)
 		"rush":
-			# 달려 들어가니 시야가 크게 당겨지고, 도착해서 벤다
-			fov_kick = -14.0
-			vm.tween_property(self, "vm_offset", Vector2(-40, 60), 0.14)
-			vm.tween_property(viewmodel, "rotation_degrees", -65.0, 0.06)
-			vm.parallel().tween_property(self, "vm_offset", Vector2(-160, 20), 0.06)
-			vm.tween_property(viewmodel, "rotation_degrees", 0.0, 0.22)
-			vm.parallel().tween_property(self, "vm_offset", Vector2.ZERO, 0.22)
-			_tween().tween_callback(_slash_fx.bind(false)).set_delay(0.16)
+			# 달려 들어가니 시야가 크게 당겨지고, 도착해서 오른쪽 위에서 왼쪽 아래로 비스듬히 벤다
+			fov_kick = -9.0  # 너무 당기면 큰 적(보스)이 화면을 다 덮었다
+			vm.kill()
+			_fp_swings([["kesa", 0.12, 0.09]])
 		"thrust":
-			vm.tween_property(self, "vm_offset", Vector2(-140, -90), 0.08)
-			vm.parallel().tween_property(viewmodel, "scale", Vector2(1.2, 1.2), 0.08)
-			vm.tween_property(self, "vm_offset", Vector2.ZERO, 0.2)
-			vm.parallel().tween_property(viewmodel, "scale", Vector2.ONE, 0.2)
-			_slash_fx(false, true)
+			# 칼끝이 화면 아래에서 한가운데(정면 깊숙이)로 곧게 뻗는다 — 가는 직선 검광
+			vm.kill()
+			_fp_swings([["thrust", 0.1, 0.07]])
 		_:
 			vm.tween_property(viewmodel, "rotation_degrees", -65.0, 0.08)
 			vm.parallel().tween_property(self, "vm_offset", Vector2(-160, 20), 0.08)
 			vm.tween_property(viewmodel, "rotation_degrees", 0.0, 0.22)
 			vm.parallel().tween_property(self, "vm_offset", Vector2.ZERO, 0.22)
 			_slash_fx(false)
+
+
+## 1인칭 칼 휘두르기. 기술마다 "칼끝이 화면에서 지나가는 길"(_fp_path)만 정하면, 손은 화면 아래 어깨에서
+## 칼끝 쪽으로 뻗고 칼날은 칼끝을 가리키도록 돌아가며, 검광은 칼끝이 지나간 길을 따라 자란다.
+## 예전엔 무기 그림을 직선으로 옮기고 흰 선을 따로 그려, 칼과 궤적이 따로 놀아 "끄적인" 느낌이었다.
+## cuts = [[경로 이름, 앞 동작이 끝난 뒤 기다릴 시간, 베는 시간], ...] 을 한 줄로 이어서(십자베기처럼 여러 번) 휘두른다.
+## linger = 다 벤 뒤 칼을 멈춰 두는 시간, fade = 검광이 사라지는 시간.
+func _fp_swings(cuts: Array, linger := 0.06, fade := 0.28) -> void:
+	var tw := _tween()
+	var first := true
+	for cut: Array in cuts:
+		var path := _fp_path(cut[0])
+		var trail: _SwingTrail = _new_trail(path)
+		var wait: float = cut[1]
+		if first:
+			# 쉬는 자세에서 칼끝을 첫 경로의 시작점까지 끌어온다(이게 휘두르기 전 "준비 동작")
+			var from_tip := _fp_rest_tip()
+			tw.tween_method(func(v: float) -> void: _fp_blade_at(from_tip.lerp(path.call(0.0), v)), 0.0, 1.0, maxf(wait, 0.04)) \
+				.set_ease(Tween.EASE_OUT)
+			first = false
+		else:
+			tw.tween_interval(wait)
+		tw.tween_method(func(t: float) -> void:
+			_fp_blade_at(path.call(t))
+			trail.head = t
+			trail.queue_redraw(), 0.0, 1.0, cut[2]).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tw.tween_callback(trail.fade_out.bind(fade))
+	tw.tween_interval(linger)
+	tw.tween_property(self, "vm_offset", Vector2.ZERO, 0.25).set_ease(Tween.EASE_IN_OUT)
+	tw.parallel().tween_property(viewmodel, "rotation_degrees", 0.0, 0.25)
+	tw.parallel().tween_property(viewmodel, "scale", Vector2.ONE, 0.25)
+
+
+## 칼 없이 검광만 경로 전체에 한꺼번에 그었다 사라지게(발도술의 늦게 터지는 섬광).
+func _fp_flash(kind: String, delay: float) -> void:
+	var trail: _SwingTrail = _new_trail(_fp_path(kind))
+	trail.tail_t = 0.0
+	trail.full = true
+	trail.alpha = 0.0
+	var tw := _tween()
+	tw.tween_interval(delay)
+	tw.tween_callback(func() -> void:
+		trail.head = 1.0
+		trail.alpha = 1.0
+		trail.queue_redraw())
+	tw.tween_interval(0.08)
+	tw.tween_callback(trail.fade_out.bind(0.5))
+
+
+func _new_trail(path: Callable) -> _SwingTrail:
+	var trail := _SwingTrail.new()
+	trail.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_root.add_child(trail)
+	ui_root.move_child(trail, viewmodel.get_index())  # 칼 그림 뒤에 — 칼날이 검광 위로 지나가게
+	trail.setup(path, _fp_shoulder(), BLADE_GLOW)
+	return trail
+
+
+## 기술별 칼끝 경로: t(0~1) → 화면 좌표. 화면 크기 비율로 적어 해상도와 무관하게.
+func _fp_path(kind: String) -> Callable:
+	var w := ui_root.size.x
+	var h := ui_root.size.y
+	match kind:
+		"rise":
+			# 화면 아래 중심을 도는 큰 호: 오른쪽 아래 → 위 → 왼쪽 위
+			var c := Vector2(w * 0.42, h * 1.02)
+			return func(t: float) -> Vector2:
+				var a := deg_to_rad(lerpf(-42.0, 115.0, t))
+				return c + Vector2(cos(a), -sin(a)) * h * 0.78
+		"cross_v":
+			# 위에서 아래로 곧게, 살짝 왼쪽으로 휘며
+			return func(t: float) -> Vector2:
+				return Vector2(lerpf(w * 0.52, w * 0.44, t) - sin(PI * t) * w * 0.05, lerpf(-h * 0.1, h * 1.05, t))
+		"cross_h":
+			# 오른쪽에서 왼쪽으로 가로, 가운데가 살짝 처지게
+			return func(t: float) -> Vector2:
+				return Vector2(lerpf(w * 1.08, -w * 0.08, t), lerpf(h * 0.38, h * 0.5, t) + sin(PI * t) * h * 0.1)
+		"kesa":
+			# 오른쪽 위 → 왼쪽 아래 비스듬히(가사베기), 바깥으로 불룩하게
+			return func(t: float) -> Vector2:
+				var p := Vector2(lerpf(w * 0.95, w * 0.1, t), lerpf(h * 0.02, h * 0.95, t))
+				return p + Vector2(-0.7, -0.7) * sin(PI * t) * h * 0.12
+		"iai", "spin":
+			# 오른쪽에서 왼쪽으로 화면을 가로지르는 수평 베기(발도술은 조금 낮게 시작해 올라가며)
+			var y0 := 0.62 if kind == "iai" else 0.55
+			return func(t: float) -> Vector2:
+				return Vector2(lerpf(w * 1.08, -w * 0.08, t), lerpf(h * y0, h * 0.45, t) - sin(PI * t) * h * 0.06)
+		"thrust":
+			# 오른쪽 아래에서 정면 한가운데로 곧게
+			return func(t: float) -> Vector2:
+				return Vector2(w * 0.7, h * 0.95).lerp(Vector2(w * 0.48, h * 0.42), t)
+	return func(t: float) -> Vector2: return Vector2(w * 0.5, h * 0.5)
+
+
+## 팔이 뻗어 나오는 어깨 자리(화면 오른쪽 아래 바깥).
+func _fp_shoulder() -> Vector2:
+	return Vector2(ui_root.size.x * 0.66, ui_root.size.y * 1.08)
+
+
+const VM_BLADE_ANGLE := 131.5  # 무기 그림에서 칼날이 향한 방향(수학 각도, 손잡이 → 칼끝)
+const VM_BLADE_LEN := 258.0  # 쉬는 크기에서 손잡이(pivot)부터 칼끝까지 화면 길이(px)
+
+
+## 쉬는 자세의 칼끝 화면 위치.
+func _fp_rest_tip() -> Vector2:
+	var a := deg_to_rad(VM_BLADE_ANGLE)
+	return _vm_rest_pivot() + Vector2(cos(a), -sin(a)) * VM_BLADE_LEN
+
+
+func _vm_rest_pivot() -> Vector2:
+	return Vector2(ui_root.size.x - 270 - 290, ui_root.size.y - 300) + viewmodel.pivot_offset
+
+
+## 칼끝을 tip 에 두는 자세: 손은 어깨→칼끝 선의 45% 지점, 칼날은 칼끝을 향하고,
+## 칼끝까지 닿도록 무기 그림을 키운다(멀리 뻗은 칼이 커 보이는 게 1인칭 원근과도 맞다).
+func _fp_blade_at(tip: Vector2) -> void:
+	var s := _fp_shoulder()
+	var hand := s + (tip - s) * 0.45
+	var blade := tip - hand
+	vm_offset = hand - _vm_rest_pivot()
+	viewmodel.rotation_degrees = VM_BLADE_ANGLE - rad_to_deg(atan2(-blade.y, blade.x))
+	var k := clampf(blade.length() / VM_BLADE_LEN, 0.8, 2.4)
+	viewmodel.scale = Vector2(k, k)
 
 
 ## 1인칭 화면에 그어지는 흰 직선 궤적(delay 뒤에 나타나 사라짐).
@@ -1750,7 +1841,7 @@ func _attack_anim(i: int, card: Dictionary, h: Dictionary) -> float:
 			_blade_fx(i, "arc", 0.08, 1.0)
 			return _lunge(i, 0.35)
 		"rise":
-			return _rise(i)
+			return _rise(i, h)
 		"thrust":
 			return _thrust(i, h)
 		"cross":
@@ -1783,11 +1874,12 @@ func _lunge(i: int, dist: float) -> float:
 
 ## 올려베기: 살짝 웅크렸다가 앞 위로 뛰어오르며 쳐올리고, 잠깐 떠 있다가 내려앉는다.
 ## 몸(스프라이트)이 실제로 뜨므로 1인칭 카메라도 같이 솟는다(_fp_xform 이 몸 위치를 따라감) — 1인칭 연출은 _fp_attack_fx 의 "rise".
-func _rise(i: int) -> float:
+func _rise(i: int, h: Dictionary) -> float:
 	var s := sprites[i]
 	var base := step_pos[i]
 	var f := step_facing[i]
-	var top := base + Vector3(f * TILE * 0.25, 1.4, 0)
+	# 앞으로는 조금만 — 붙어 있는 적 쪽으로 더 나가면 1인칭 카메라가 적 몸속으로 들어갔다
+	var top := base + Vector3(f * TILE * minf(0.25, _dash_reach(i, h, 0.25) - 0.1), 1.4, 0)
 	var tw := _motion(i)
 	tw.tween_property(s, "position", base + Vector3(0, -0.12, 0), 0.1).set_ease(Tween.EASE_OUT)
 	tw.tween_property(s, "position", top, 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
@@ -1859,7 +1951,7 @@ func _rush(i: int, h: Dictionary) -> float:
 	var s := sprites[i]
 	var base := step_pos[i]
 	var f := step_facing[i]
-	var reach := _dash_reach(i, h, _reach(h) - 0.85)
+	var reach := _dash_reach(i, h, _reach(h) - 1.1)
 	var to := base + Vector3(f * TILE * reach, 0, 0)
 	s.play("walk")
 	var tw := _motion(i)
@@ -1877,7 +1969,7 @@ func _rush(i: int, h: Dictionary) -> float:
 func _dash_reach(i: int, h: Dictionary, want: float) -> float:
 	var stop := want
 	for tg: Dictionary in h.targets:
-		stop = minf(stop, absf(sprite_tile(tg.to).x - sprite_tile(i).x) - 0.85)
+		stop = minf(stop, absf(sprite_tile(tg.to).x - sprite_tile(i).x) - 1.1)  # 큰 적(보스)도 1인칭 화면을 다 덮지 않게
 	return maxf(stop, 0.15)
 
 
@@ -1903,7 +1995,8 @@ func _blade_fx(i: int, kind: String, delay: float, length: float, at := 0.0) -> 
 	sp.shaded = false
 	sp.no_depth_test = true
 	sp.flip_h = f < 0
-	sp.modulate = _color(i).lightened(0.6)
+	# 검광은 색이 그림에 들어 있다(흰 심 + 푸른빛). 누구 공격인지는 바닥 칸 색으로 구분된다
+	sp.modulate = Color.WHITE
 	sp.modulate.a = 0.0
 	var feet := step_pos[i] + Vector3(0, -sprite_half[i], 0)
 	match kind:
@@ -1940,50 +2033,54 @@ func _blade_tex(kind: String) -> Texture2D:
 	if _blade_texs.has(kind):
 		return _blade_texs[kind]
 	var img: Image
+	# 모두 같은 검광 스타일(1인칭 _SwingTrail 과 같게): 칼끝 쪽 가장자리에 흰 심, 안쪽으로 푸른빛이 번지며 옅어지고,
+	# 꼬리로 갈수록 가늘고 투명하다. 예전엔 흰 단색 덩어리라 "칼이 지나간 빛"으로 안 읽혔다
 	match kind:
-		"arc":
-			# 초승달: 바깥 원에서 오른쪽으로 비킨 안쪽 원을 뺀 모양. 위아래 끝이 가늘어진다
-			img = Image.create(64, 96, false, Image.FORMAT_RGBA8)
-			for y in 96:
-				for x in 64:
-					var p := Vector2(x, y)
-					var outer := p.distance_to(Vector2(8, 48)) < 46.0
-					var inner := p.distance_to(Vector2(-6, 48)) < 46.0
-					if outer and not inner:
-						var a := clampf(1.0 - absf(y - 48.0) / 48.0, 0.0, 1.0)
-						img.set_pixel(x, y, Color(1, 1, 1, a))
-		"rise":
-			# 올려베기: 앞 아래에서 시작해 위로 휘어 오르는 초승달(아래 끝이 가늘고 위로 갈수록 굵다)
-			img = Image.create(64, 96, false, Image.FORMAT_RGBA8)
-			for y in 96:
-				for x in 64:
-					var p := Vector2(x, y)
-					var outer := p.distance_to(Vector2(-14, 52)) < 58.0
-					var inner := p.distance_to(Vector2(-26, 60)) < 56.0
-					if outer and not inner and p.x > 4:
-						var a := clampf(1.0 - y / 96.0, 0.15, 1.0)
-						img.set_pixel(x, y, Color(1, 1, 1, a))
+		"arc", "rise":
+			# 몸 앞쪽에서 휘는 호. arc = 위(꼬리)에서 아래(머리)로 내려베기, rise = 아래에서 위로 올려베기
+			img = Image.create(96, 180, false, Image.FORMAT_RGBA8)
+			var c := Vector2(-20, 90)
+			for y in 180:
+				for x in 96:
+					var v := Vector2(x, y) - c
+					var th := rad_to_deg(atan2(-v.y, v.x))
+					var u := (th + 55.0) / 110.0 if kind == "rise" else (55.0 - th) / 110.0
+					if u < 0.0 or u > 1.0:
+						continue
+					var wd := lerpf(3.0, 22.0, pow(u, 0.6))
+					var d := 110.0 - v.length()
+					if d >= 0.0 and d <= wd:
+						img.set_pixel(x, y, _glow_col(d / wd, u))
 		"streak", "flash":
-			# 앞(오른쪽)으로 갈수록 굵고 밝아지는 가로 줄. 섬광은 더 가늘고 길게
-			var hh := 10 if kind == "streak" else 4
-			img = Image.create(128, hh * 2 + 2, false, Image.FORMAT_RGBA8)
+			# 앞(오른쪽, 머리)으로 갈수록 굵고 밝아지는 가로 줄. 섬광은 더 가늘게
+			var hh := 10.0 if kind == "streak" else 4.0
+			img = Image.create(128, int(hh) * 2 + 2, false, Image.FORMAT_RGBA8)
 			for x in 128:
-				var t := x / 127.0
-				var half := (0.3 + 0.7 * t) * hh
+				var u := x / 127.0
+				var wd := lerpf(1.5, hh, pow(u, 0.6))
 				for y in img.get_height():
 					var d := absf(y - hh - 0.5)
-					if d < half:
-						img.set_pixel(x, y, Color(1, 1, 1, (0.25 + 0.75 * t) * (1.0 - d / half * 0.6)))
+					if d <= wd:
+						img.set_pixel(x, y, _glow_col(d / wd, maxf(u, 0.2)))
 		"vline":
-			# 판에 눕힐 세로 내려치기: 가운데가 굵은 긴 띠
-			img = Image.create(96, 12, false, Image.FORMAT_RGBA8)
+			# 판에 눕힐 세로 내려치기: 가운데가 굵고 양 끝이 가는 띠
+			img = Image.create(96, 14, false, Image.FORMAT_RGBA8)
 			for x in 96:
-				var half := 6.0 * (1.0 - absf(x - 47.5) / 48.0)
-				for y in 12:
-					if absf(y - 5.5) < half:
-						img.set_pixel(x, y, Color(1, 1, 1, 0.9))
+				var u := 1.0 - absf(x - 47.5) / 48.0
+				var wd := lerpf(1.0, 6.5, u)
+				for y in 14:
+					var d := absf(y - 6.5)
+					if d <= wd:
+						img.set_pixel(x, y, _glow_col(d / wd, maxf(u, 0.25)))
 	_blade_texs[kind] = ImageTexture.create_from_image(img)
 	return _blade_texs[kind]
+
+
+## 검광 한 점의 색. k = 칼끝 쪽 가장자리에서 안쪽으로 얼마나 들어왔는지(0~1), u = 꼬리(0) → 머리(1).
+func _glow_col(k: float, u: float) -> Color:
+	var col := Color.WHITE if k < 0.3 else Color(BLADE_GLOW, 1.0 - (k - 0.3) / 0.7)
+	col.a *= pow(u, 1.2)
+	return col
 
 
 ## 잔상: 지나가는 길에 반투명 복사본을 몇 개 남긴다(돌진·발도술처럼 빠른 이동이 "순간이동"으로 안 보이게).
@@ -2039,7 +2136,9 @@ func _spin(i: int) -> float:
 	var hop := _motion(i)
 	hop.tween_property(s, "position", base + Vector3(0, 0.35, 0), SPIN_TIME * 0.5).set_ease(Tween.EASE_OUT)
 	hop.tween_property(s, "position", base, SPIN_TIME * 0.5).set_ease(Tween.EASE_IN)
-	_spin_vfx(base + Vector3(0, -sprite_half[i], 0), step_facing[i], _color(i).lightened(0.15))
+	# 칼을 든 캐릭터의 회전베기는 다른 검광과 같은 푸른빛, 몬스터(슬라임 튀기기 등)는 자기 색
+	var tint := BLADE_GLOW if rules.fighters[i].char_id in ["sword", "skeleton"] else _color(i).lightened(0.15)
+	_spin_vfx(base + Vector3(0, -sprite_half[i], 0), step_facing[i], tint)
 	return SPIN_TIME * 0.6
 
 
@@ -2715,3 +2814,74 @@ func _handle_debug_args() -> void:
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(shot)
 	get_tree().quit()
+
+
+## 1인칭 검광: 칼끝이 지나간 길(path)을 따라 남는 띠. 칼날이 쓸고 간 면처럼 칼끝에서 어깨 쪽으로 폭을 가지며,
+## 칼끝(머리) 쪽이 굵고 밝고 꼬리로 갈수록 가늘게 사라진다. 바깥 가장자리에 흰 심, 안쪽으로 푸른빛 —
+## 가산 혼합이라 배경 위에서 빛처럼 보인다.
+class _SwingTrail extends Control:
+	const TAIL := 0.6  # 꼬리 길이(경로 진행도 비율)
+	const STEPS := 32
+	const WIDTH := 46.0  # 머리 쪽 띠 폭(px)
+	var path: Callable
+	var shoulder := Vector2.ZERO
+	var tint := Color.WHITE
+	var head := 0.0
+	var tail_t := 0.0
+	var full := false  # true 면 꼬리를 잘라 내지 않고 경로 전체(섬광)
+	var alpha := 1.0
+
+	func setup(p: Callable, s: Vector2, t: Color) -> void:
+		path = p
+		shoulder = s
+		tint = t
+		set_anchors_preset(Control.PRESET_FULL_RECT)
+		var m := CanvasItemMaterial.new()
+		m.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+		material = m
+
+	func fade_out(sec: float) -> void:
+		var from := _tail()
+		var tw := create_tween()
+		tw.tween_method(func(v: float) -> void:
+			alpha = 1.0 - v
+			tail_t = lerpf(from, head, v)
+			full = true
+			queue_redraw(), 0.0, 1.0, sec)
+		tw.tween_callback(queue_free)
+
+	func _tail() -> float:
+		return tail_t if full else maxf(0.0, head - TAIL)
+
+	func _draw() -> void:
+		var tail := _tail()
+		if head - tail < 0.01 or alpha <= 0.0:
+			return
+		# 띠가 넓으면 화면을 허옇게 덮어 "빛"이 아니라 "얼룩"으로 보였다 — 칼끝 쪽에 좁게
+		_band(tail, -0.08, 1.0, Color(tint, 0.6 * alpha))
+		_band(tail, 0.0, 0.32, Color(1, 1, 1, 0.95 * alpha))
+
+	## 칼끝에서 어깨 쪽으로 [w0, w1] × WIDTH 만큼의 띠. 꼬리 쪽은 폭이 줄고 투명해진다.
+	func _band(tail: float, w0: float, w1: float, col: Color) -> void:
+		var pts := PackedVector2Array()
+		var cols := PackedColorArray()
+		var prev_a := Vector2.ZERO
+		var prev_b := Vector2.ZERO
+		var prev_c := Color()
+		for k in STEPS + 1:
+			var u := float(k) / STEPS  # 0 = 꼬리, 1 = 머리
+			var tip: Vector2 = path.call(lerpf(tail, head, u))
+			var inward := (shoulder - tip).normalized()
+			var wd := WIDTH * lerpf(0.1, 1.0, pow(u, 0.6))
+			var a := tip + inward * wd * w0
+			var b := tip + inward * wd * w1
+			var c := Color(col, col.a * pow(u, 1.5))
+			if k > 0:
+				pts.append_array([prev_a, a, b, prev_a, b, prev_b])
+				var ci := Color(prev_c, prev_c.a * 0.35)
+				var cj := Color(c, c.a * 0.35)
+				cols.append_array([prev_c, c, cj, prev_c, cj, ci])
+			prev_a = a
+			prev_b = b
+			prev_c = c
+		RenderingServer.canvas_item_add_triangle_array(get_canvas_item(), PackedInt32Array(), pts, cols)
