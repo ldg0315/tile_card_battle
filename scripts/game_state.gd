@@ -33,8 +33,10 @@ const CHAPTERS := [
 	]},
 ]
 const VERSUS_THEME := "forest"
+const PRACTICE_TARGET := "slime"  # 기술 체험의 연습 상대
 
-var mode := ""  # "single" | "versus" | "" (전투 장면을 바로 실행)
+var mode := ""  # "single" | "versus" | "practice"(기술 체험) | "" (전투 장면을 바로 실행)
+var mode_before_practice := ""  # 기술 체험에서 캐릭터 선택으로 돌아갈 때 원래 모드(싱글/대전)로 되돌리려고
 var player_char := "sword"
 var chapter := 0
 var stage := 0  # 장 안에서의 순서
@@ -75,6 +77,21 @@ func start_single(from_chapter := 0, from_stage := 0) -> void:
 
 func start_versus() -> void:
 	mode = "versus"
+
+
+## 기술 체험: 그 캐릭터의 모든 기술(보상 기술 포함)을 MP·HP 걱정 없이 하나씩 써 보는 연습장.
+## 플레이어용 둘러보기이자, 개발할 때 새 기술의 모션·이펙트를 1·3인칭으로 바로 확인하는 곳.
+func start_practice(char_id: String) -> void:
+	if mode != "practice":
+		mode_before_practice = mode
+	mode = "practice"
+	player_char = char_id
+	goto_battle()
+
+
+func end_practice() -> void:
+	mode = mode_before_practice if mode_before_practice != "" else "single"
+	goto_select()
 
 
 func player_max_hp() -> int:
@@ -141,6 +158,10 @@ func battle_config() -> Dictionary:
 			hps.append(enemy_hp(e))
 		return {"player": player_char, "enemies": ids, "enemy_hp": hps, "player_hp": player_hp,
 			"theme": current_chapter().theme, "extra_cards": extra_cards, "max_hp_bonus": max_hp_bonus}
+	if mode == "practice":
+		# 상대는 아무것도 하지 않는 연습 상대. HP 는 넉넉하게(battle.gd 가 행동마다 다시 채운다)
+		return {"player": player_char, "enemies": [PRACTICE_TARGET], "enemy_hp": [999], "player_hp": -1,
+			"theme": VERSUS_THEME, "extra_cards": Cards.reward_cards_for(player_char), "max_hp_bonus": 0}
 	return {"player": player_char, "enemies": [versus_enemy()], "enemy_hp": [-1], "player_hp": -1, "theme": VERSUS_THEME,
 		"extra_cards": [], "max_hp_bonus": 0}
 
@@ -245,6 +266,7 @@ func choose_character(char_id: String) -> void:
 ##   -- --extra=heal,sword_iai  (--stage 와 함께) 보상 카드를 얻은 상태로
 ##   -- --map           싱글 스테이지 맵으로 바로
 ##   -- --versus        AI 대전으로 바로
+##   -- --practice      기술 체험으로 바로(--char 와 함께)
 func handle_skip_args() -> bool:
 	var args := OS.get_cmdline_user_args()
 	var extra := []
@@ -273,6 +295,9 @@ func handle_skip_args() -> bool:
 		if a == "--versus":
 			start_versus()
 			goto_battle()
+			return true
+		if a == "--practice":
+			start_practice(player_char)
 			return true
 	return false
 

@@ -23,7 +23,7 @@ func _ready() -> void:
 	box.set_anchors_preset(Control.PRESET_CENTER)
 	box.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	box.grow_vertical = Control.GROW_DIRECTION_BOTH
-	box.add_theme_constant_override("separation", 24)
+	box.add_theme_constant_override("separation", 14)  # 기술 체험 버튼까지 한 화면(720)에 들어가게
 	add_child(box)
 	box.add_child(UiStyle.label("캐릭터 선택", 40, Color(1, 0.88, 0.5)))
 	box.add_child(UiStyle.label("싱글 플레이 — 던전으로" if Game.mode == "single" else "AI 대전 — 고르지 않은 캐릭터가 상대", 17, Color(0.7, 0.73, 0.8)))
@@ -55,7 +55,7 @@ func _char_card(id: String) -> Control:
 	v.add_theme_constant_override("separation", 8)
 	card.add_child(v)
 	v.add_child(UiStyle.label(ch.name, 28, accent))
-	v.add_child(UiStyle.portrait(CharArt.build_frames(id), 4.0))
+	v.add_child(UiStyle.portrait(CharArt.build_frames(id), 3.4))
 	v.add_child(UiStyle.label("HP %d" % Game.max_hp(id), 17))
 	var blurb := UiStyle.label(BLURB.get(id, ""), 15, Color(0.75, 0.78, 0.85))
 	blurb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -71,4 +71,13 @@ func _char_card(id: String) -> Control:
 	pick.pressed.connect(Sound.play.bind("click"))
 	pick.pressed.connect(Game.choose_character.bind(id))
 	v.add_child(pick)
+	# 모든 기술(보상 기술 포함)을 1·3인칭으로 한 번씩 써 보는 연습장 — 고르기 전에 손맛을 보고, 개발할 땐 새 기술 확인용
+	var practice := Button.new()
+	practice.text = "기술 체험"
+	practice.custom_minimum_size = Vector2(0, 34)
+	practice.add_theme_font_size_override("font_size", 16)
+	UiStyle.style_button(practice, Color(0.6, 0.75, 0.95))
+	practice.pressed.connect(Sound.play.bind("click"))
+	practice.pressed.connect(Game.start_practice.bind(id))
+	v.add_child(practice)
 	return card

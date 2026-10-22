@@ -127,6 +127,8 @@ var result_panel: PanelContainer
 var result_label: Label
 var result_buttons: HBoxContainer
 var card_buttons := {}  # card id -> Button
+var practice := false  # 기술 체험: 카드를 누르면 그 기술 하나만 바로 쓰고, HP·MP 는 늘 가득
+var last_practice := ""  # R 로 다시 쓸 기술
 var move_grid: GridContainer  # 손패의 이동 버튼 묶음(1인칭에선 몸 기준 순서로 다시 늘어놓는다)
 var compact_cards := false  # 손패가 많아 카드 폭을 줄였으면 카드 글씨도 짧게
 var view_button: Button
@@ -763,6 +765,10 @@ func _new_game() -> void:
 	rules = Rules.new(cfg.player, cfg.enemies)
 	# 싱글은 늘 플레이어가 먼저 행동하고, 대전은 단계마다 먼저 움직이는 쪽을 번갈아 공평하게
 	rules.alternate = Game.mode == "versus"
+	practice = Game.mode == "practice"
+	if practice:
+		rules.fighters[1].pos = Vector2i(2, 1)  # 연습 상대는 바로 앞 칸에 — 대부분의 기술이 첫 사용부터 맞게
+		rules._update_facing()
 	rules.fighters[0].extra.assign(cfg.extra_cards)  # 이번 던전에서 보상으로 얻은 카드
 	rules.fighters[0].max_hp += cfg.max_hp_bonus
 	rules.fighters[0].hp = cfg.player_hp if cfg.player_hp >= 0 else rules.fighters[0].max_hp
@@ -810,6 +816,9 @@ func _new_game() -> void:
 			names.append(_who(i))
 		_log("[b]%s · %s[/b]%s%s — %s 등장!\n" % [Game.stage_code(Game.chapter, Game.stage), st.name, wave_txt,
 			" (보스)" if st.get("boss", false) else "", ", ".join(names)])
+	if practice:
+		_log("[b]기술 체험[/b] — 카드를 누르면 그 기술(이동 포함)을 바로 한 번 씁니다. HP·MP 는 줄지 않고 연습 상대는 움직이지 않습니다.")
+		_log("[b]R[/b] 방금 기술 다시   [b]V[/b] 1·3인칭   [b]C[/b] 카메라 고정·자유   [b]Esc[/b] 캐릭터 선택으로")
 	_log("카드 3장을 순서대로 고르고 [b]실행[/b]을 누르세요.\n카드에 마우스를 올리면 범위가 노랗게 보입니다.")
 	_log("이동 카드는 화면 기준(←→↑↓)이고 다른 캐릭터에 막히지 않습니다(같은 칸 가능). 공격은 바라보는 방향(발밑 화살표)으로 나갑니다. 이동하면 착지하자마자, 이동하지 않았으면 턴이 끝날 때 가장 가까운 적을 향해 돌아섭니다. 같은 칸의 적은 어떤 공격에도 맞습니다. MP 는 턴마다 %d 회복합니다." % Rules.MP_REGEN)
 	if rules.alternate:
@@ -856,7 +865,9 @@ func _show_current_stats() -> void:
 func _show_stats(hp: Array, mp: Array) -> void:
 	for i in hp.size():
 		var label := "나 · %s" % Cards.CHARACTERS[rules.fighters[i].char_id].name if i == 0 else _who(i)
-		if Game.mode != "single" and i > 0:
+		if practice and i > 0:
+			label = "연습 상대 · " + label
+		elif Game.mode != "single" and i > 0:
 			label = "AI · " + label
 		name_labels[i].text = "%s    HP %d   MP %d" % [label, hp[i], mp[i]]
 		hp_bars[i].value = hp[i]
@@ -865,6 +876,9 @@ func _show_stats(hp: Array, mp: Array) -> void:
 
 
 func _refresh_hand() -> void:
+	if practice:
+		_refresh_practice_hand()
+		return
 	var mp: int = rules.fighters[0].mp
 	var used: int = rules.cost_of(selected)
 	var names := PackedStringArray()
@@ -940,6 +954,25 @@ func _body_move_name(card: Dictionary, facing: int) -> String:
 	return "%s %s" % [arrow, word] if card.cost == 0 else "%s %s 2칸" % [arrow, word]
 
 
+## 기술 체험의 손패: 순번·MP 제한이 없고, 보드 밖으로 못 가는 이동만 막는다.
+func _refresh_practice_hand() -> void:
+	slot_label.text = "기술 체험 — 카드를 누르면 바로 사용   R 다시" + ("  (%s)" % Cards.get_card(last_practice).name if last_practice != "" else "")
+	go_button.text = "  나가기 (Esc)  "
+	go_button.disabled = false
+	var facing: int = rules.fighters[0].facing
+	for id: String in card_buttons:
+		var b: Button = card_buttons[id]
+		var card: Dictionary = Cards.get_card(id)
+		var dead: bool = card.type == "move" and rules.first_dead_move(0, [id]) != -1
+		b.disabled = busy or dead
+		b.tooltip_text = "보드 밖이라 갈 수 없음" if dead else ""
+		b.text = _card_text(card, facing)
+		b.modulate = Color(1.0, 0.85, 0.35) if id == last_practice else Color.WHITE
+		if card.type == "attack":
+			b.icon = RangeIcon.make(card, 6 if first_person else 8, facing, first_person)
+	_arrange_moves()
+
+
 ## 대전에서 k 번째 단계에 내가 먼저면 "선", 나중이면 "후". 싱글은 늘 내가 먼저라 표시하지 않는다.
 func _initiative_mark(k: int) -> String:
 	if not rules.alternate:
@@ -956,6 +989,9 @@ func _show_step_banner(ev: Dictionary) -> void:
 ## 카드를 누르면 다음 순번으로 들어가고, 이미 고른 카드를 다시 누르면 빠진다(뒤 순번은 앞으로 당겨진다).
 func _on_card_pressed(id: String) -> void:
 	if busy:
+		return
+	if practice:
+		_practice_use(id)
 		return
 	if selected.has(id):
 		selected.erase(id)
@@ -976,7 +1012,44 @@ func _on_card_pressed(id: String) -> void:
 	_refresh_hand()
 
 
+## 기술 체험: 기술 하나만 그 자리에서 쓴다(규칙 그대로 한 단계짜리 턴). 끝나면 모두의 HP·MP 를 채워 끝없이 연습.
+func _practice_use(id: String) -> void:
+	if Cards.get_card(id).type == "move" and rules.first_dead_move(0, [id]) != -1:
+		return
+	last_practice = id
+	busy = true
+	Sound.play("go")
+	_clear_tiles()
+	_refresh_hand()
+	var events: Array = rules.resolve_turn([[id], []])
+	for ev: Dictionary in events:
+		for act: Dictionary in ev.actions:
+			await _play_step(act)
+	_sync_after_turn()
+	for f in rules.fighters:
+		f.hp = f.max_hp
+		f.mp = Rules.MAX_MP
+	rules.winner = -1
+	_show_current_stats()
+	busy = false
+	_refresh_hand()
+
+
+## 턴이 끝나면 규칙대로 모두 가장 가까운 적을 향해 돌아선다 — 다음 턴 미리보기는 이 방향 기준. 방어 자세도 푼다.
+func _sync_after_turn() -> void:
+	for i in rules.fighters.size():
+		step_facing[i] = rules.fighters[i].facing
+		sprites[i].flip_h = step_facing[i] < 0
+		_update_mark(i)
+		if not gone[i]:
+			sprites[i].modulate = Color.WHITE
+			sprites[i].play("idle")
+
+
 func _on_go() -> void:
+	if practice:
+		Game.end_practice()  # 체험에선 실행 버튼이 "나가기"
+		return
 	if busy or not rules.is_valid_selection(0, selected):
 		return
 	busy = true
@@ -997,14 +1070,7 @@ func _on_go() -> void:
 		for act: Dictionary in ev.actions:
 			await _play_step(act)
 	step_label.hide()
-	# 턴이 끝나면 규칙대로 모두 가장 가까운 적을 향해 돌아선다 — 다음 턴 미리보기는 이 방향 기준
-	for i in rules.fighters.size():
-		step_facing[i] = rules.fighters[i].facing
-		sprites[i].flip_h = step_facing[i] < 0
-		_update_mark(i)
-		if not gone[i]:
-			sprites[i].modulate = Color.WHITE
-			sprites[i].play("idle")
+	_sync_after_turn()
 	busy = false
 	if rules.winner != -1:
 		_show_result()
@@ -1020,6 +1086,8 @@ func _on_go() -> void:
 func _plan_enemies() -> void:
 	warn_label.hide()
 	enemy_plans.clear()
+	if practice:
+		return  # 연습 상대는 아무것도 하지 않는다
 	for i in range(1, rules.fighters.size()):
 		if not rules.fighters[i].alive():
 			continue
@@ -1122,6 +1190,12 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 	elif event.keycode == KEY_TAB:
 		_cycle_target()
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_R and practice and last_practice != "":
+		_on_card_pressed(last_practice)
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_ESCAPE and practice and not busy:
+		Game.end_practice()
 		get_viewport().set_input_as_handled()
 	elif event.keycode == KEY_C and first_person:
 		_toggle_free_cam()
@@ -2798,7 +2872,8 @@ func _handle_debug_args() -> void:
 				Input.parse_input_event(ev)
 				await get_tree().create_timer(0.6).timeout
 	if auto:
-		_on_go()
+		if not practice:  # 체험은 카드를 누르는 순간 이미 실행 중(실행 버튼은 나가기)
+			_on_go()
 		var elapsed := 0.0
 		for k in mids.size():
 			await get_tree().create_timer(mids[k] - elapsed).timeout
