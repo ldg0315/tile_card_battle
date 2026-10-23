@@ -34,6 +34,9 @@ const CHARACTERS := {
 					Vector2i(1, 0), Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1)]},
 			"sword_thrust": {"name": "찌르기", "anim": "thrust", "type": "attack", "cost": 30, "dmg": 30,
 				"range": [Vector2i(1, 0), Vector2i(2, 0)]},
+			# 필살기: 필살 게이지가 가득 차야 쓴다(game_rules). 앞 2열 × 3줄을 지그재그로 베고 큰 십자 섬광
+			"sword_ult": {"name": "섬광난무", "anim": "ult_sword", "type": "attack", "cost": 0, "dmg": 50, "ultimate": true,
+				"range": [Vector2i(1, -1), Vector2i(1, 0), Vector2i(1, 1), Vector2i(2, -1), Vector2i(2, 0), Vector2i(2, 1)]},
 		},
 	},
 	"archer": {
@@ -46,6 +49,10 @@ const CHARACTERS := {
 				"range": [Vector2i(2, -1), Vector2i(2, 0), Vector2i(2, 1)]},
 			"archer_kick": {"name": "발차기", "anim": "kick", "type": "attack", "cost": 5, "dmg": 10,
 				"range": [Vector2i(1, 0)]},
+			# 필살기: 하늘로 빛 화살 한 발 → 앞 3열 × 3줄에 유성 화살이 쏟아진다
+			"archer_ult": {"name": "유성 화살비", "anim": "ult_archer", "type": "attack", "cost": 0, "dmg": 35, "ultimate": true,
+				"range": [Vector2i(1, -1), Vector2i(1, 0), Vector2i(1, 1), Vector2i(2, -1), Vector2i(2, 0), Vector2i(2, 1),
+					Vector2i(3, -1), Vector2i(3, 0), Vector2i(3, 1)]},
 		},
 	},
 	# ---- 싱글 플레이 몬스터. hp 를 생략하면 MAX_HP, scale 은 화면에서의 키 배율
@@ -190,6 +197,14 @@ static func get_card(id: String) -> Dictionary:
 		if group.has(id):
 			return group[id]
 	return {}
+
+
+## 캐릭터의 필살기 카드 id(없으면 ""). 필살기는 attacks 안에 "ultimate": true 로 둔다.
+static func ultimate_of(char_id: String) -> String:
+	for id: String in CHARACTERS.get(char_id, {}).get("attacks", {}):
+		if CHARACTERS[char_id].attacks[id].get("ultimate", false):
+			return id
+	return ""
 
 
 ## 이 캐릭터가 보상으로 얻을 수 있는 카드(자기 기술 + 공용).

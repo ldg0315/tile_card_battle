@@ -29,7 +29,7 @@
 ## 구조
 
 - `scripts/game_rules.gd`: 순수 규칙(이동, 공격, 방어, 승패). 화면 코드를 참조하지 않습니다.
-- `scripts/cards.gd`: 카드와 캐릭터 정의. 새 캐릭터나 공격은 여기에만 추가하면 됩니다.
+- `scripts/cards.gd`: 카드와 캐릭터 정의. 새 캐릭터나 공격은 여기에만 추가하면 됩니다. 공격에 `"ultimate": true` 를 붙이면 필살기(필살 게이지가 가득 차야 씀)가 됩니다.
 - `scripts/ai.gd`: 단순 AI. 가능한 조합을 전부 시뮬레이션한 뒤 약간의 난수를 섞어 고릅니다.
 - `scripts/battle.gd`: 3D 보드, 빌보드 도트 스프라이트, UI, 연출. 규칙이 돌려준 이벤트만 읽어서 보여줍니다.
 - `scripts/char_art.gd`: 캐릭터 동작 프레임을 공급합니다. `art/` 폴더에 그림이 있으면 그 그림을, 없으면 `scripts/pixel_art.gd`의 임시 도트를 씁니다. 그림 넣는 규칙은 [art/README.md](art/README.md)에 있습니다.

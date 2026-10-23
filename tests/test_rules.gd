@@ -47,6 +47,7 @@ func _init() -> void:
 	_test_bgm_slots()
 	_test_ai_fixed_slots()
 	_test_boss_pattern()
+	_test_ultimate_gauge()
 	print("ALL PASSED" if failed == 0 else "FAILED: %d" % failed)
 	quit(0 if failed == 0 else 1)
 
@@ -502,3 +503,24 @@ func _test_hires_art() -> void:
 	DirAccess.remove_absolute(bg + "/_testtheme.png")
 	if made_dir:
 		DirAccess.remove_absolute(bg)
+
+
+## 필살 게이지: 주면 피해만큼, 받으면 1.4배 차고, 가득 차야 필살기를 쓸 수 있으며 쓰면 0. 몬스터는 차지 않는다.
+func _test_ultimate_gauge() -> void:
+	var r = _setup(Vector2i(1, 1), Vector2i(2, 1))
+	r.resolve_turn(["sword_rise", "rest", "rest"], ["rest", "archer_kick", "rest"])
+	check(r.fighters[0].gauge == 25 + 14 and r.fighters[1].gauge == 10 + 35, "준 피해 ×1, 받은 피해 ×1.4 (%d, %d)" % [r.fighters[0].gauge, r.fighters[1].gauge])
+	check(not r.is_valid_selection(0, ["sword_ult", "rest", "guard"]), "게이지가 덜 차면 필살기 불가")
+	r.fighters[0].gauge = Rules.GAUGE_MAX
+	check(r.is_valid_selection(0, ["sword_ult", "rest", "guard"]), "가득 차면 필살기 가능")
+	var hp: int = r.fighters[1].hp
+	var ev: Array = r.resolve_turn(["sword_ult", "rest", "rest"], ["rest", "rest", "rest"])
+	check(r.fighters[1].hp == hp - 50 and r.fighters[0].gauge == 0, "필살기: 피해 50, 쓰면 게이지 0(필살기 피해로는 안 참)")
+	check(ev[0].gauge[0] == 0, "단계 결과에 게이지")
+	var m = Rules.new("sword", "slime")
+	m.fighters[0].pos = Vector2i(1, 1)
+	m.fighters[1].pos = Vector2i(2, 1)
+	m._update_facing()
+	m.resolve_turn(["sword_rise", "rest", "rest"], ["slime_tackle", "rest", "rest"])
+	check(m.fighters[1].gauge == 0 and m.fighters[0].gauge > 0, "몬스터는 게이지가 차지 않음")
+	check(Cards.ultimate_of("archer") == "archer_ult" and Cards.ultimate_of("slime") == "", "필살기 찾기")

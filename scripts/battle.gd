@@ -48,6 +48,24 @@ const CARD_ACCENT := {
 const FP_SPIN_CAMERA := true
 const SPIN_TIME := 0.45
 const ORDER_MARK := ["①", "②", "③"]
+const ULT_GOLD := Color(1.0, 0.78, 0.25)  # 필살 게이지·필살기 카드·필살기 이름의 금빛
+const ULT_PREP := 1.0  # 필살기 준비 연출 길이(초)
+# 필살기 준비: center(화면 비율 좌표) 둘레 radius 만 밝게 남기고 바깥을 어둡게, 가장자리에 기운 색을 살짝 섞는다
+const ULT_DIM_SHADER := """
+shader_type canvas_item;
+uniform float amount = 0.0;
+uniform vec2 center = vec2(0.5, 0.5);
+uniform float radius = 0.18;
+uniform float aspect = 1.7778;
+uniform vec4 tint : source_color = vec4(0.5, 0.7, 1.0, 1.0);
+void fragment() {
+	vec2 p = (UV - center) * vec2(aspect, 1.0);
+	float r = length(p);
+	float a = smoothstep(radius, radius * 2.2, r);
+	vec3 col = mix(vec3(0.0), tint.rgb * 0.35, smoothstep(0.6, 1.2, r));
+	COLOR = vec4(col, a * 0.78 * amount);
+}
+"""
 const PIERCE_RED := Color(1.0, 0.22, 0.15)  # 관통 화살의 붉은 빛
 # 1인칭 저격 조준경: 가운데 원만 뚫리고 바깥은 어둡게, 붉은 십자선(가운데는 비움)과 원 테두리. amount 로 나타나고 사라진다
 const SCOPE_SHADER := """
@@ -155,6 +173,7 @@ var gone: Array[bool] = []  # 쓰러져 사라진 전투원
 var name_labels: Array[Label] = []
 var hp_bars: Array[ProgressBar] = []
 var mp_bars: Array[ProgressBar] = []
+var gauge_bars: Array = []  # 전투원 번호 → 필살 게이지 막대(필살기 없는 몬스터는 null)
 var offscreen_marks: Array[Label] = []  # 1인칭에서 화면 밖에 있는 적 방향 표시
 
 var ui_root: Control
@@ -182,6 +201,11 @@ var compass_label: Label
 var fp_act_label: Label
 var kick_leg: TextureRect  # 1인칭 발차기 때 화면 아래에서 올라오는 내 다리
 var scope: ColorRect  # 1인칭 저격 조준경(가운데만 뚫린 어둠 + 십자선)
+var ult_dim: ColorRect  # 필살기 준비: 쓰는 캐릭터 둘레만 남기고 화면을 어둡게(스포트라이트)
+var ult_banner: Label  # 필살기 이름("필살! 섬광난무")
+var ult_actor := -1  # 지금 필살기를 쓰는 전투원(스포트라이트 중심)
+var ult_focus := Vector3.ZERO  # 3인칭 카메라가 다가갈 점
+var tp_focus_w := 0.0  # 3인칭 카메라가 ult_focus 쪽으로 다가간 정도(0~1)
 var viewmodel: TextureRect  # 1인칭에서 화면 오른쪽 아래에 보이는 내 무기
 var minimap: Control
 var vm_offset := Vector2.ZERO  # 무기 휘두르기 트윈은 이 값을 움직인다(위치는 매 프레임 흔들림과 합쳐 다시 계산되므로)
@@ -567,6 +591,19 @@ func _build_ui() -> void:
 	scope.hide()
 	root.add_child(scope)
 
+	ult_dim = ColorRect.new()
+	ult_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ult_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var um := ShaderMaterial.new()
+	um.shader = Shader.new()
+	um.shader.code = ULT_DIM_SHADER
+	ult_dim.material = um
+	ult_dim.hide()
+	root.add_child(ult_dim)
+	ult_banner = _overlay_label(root, 190, ULT_GOLD)
+	ult_banner.add_theme_font_size_override("font_size", 46)
+	ult_banner.add_theme_constant_override("outline_size", 12)
+
 	# 1인칭에서 내가 맞으면 내 스프라이트 대신 화면 전체를 붉게 번쩍인다
 	hurt_flash = ColorRect.new()
 	hurt_flash.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -733,7 +770,7 @@ func _overlay_label(parent: Control, top: int, color: Color) -> Label:
 
 
 ## 이름 + HP·MP 막대 한 묶음. 적은 오른쪽 정렬로 여러 줄 쌓인다.
-func _stat_block(parent: VBoxContainer, right: bool, compact: bool) -> void:
+func _stat_block(parent: VBoxContainer, right: bool, compact: bool, ult := false) -> void:
 	var l := Label.new()
 	l.add_theme_font_size_override("font_size", 17 if compact else 20)
 	# 해안가처럼 밝은 배경에서도 읽히게 외곽선
@@ -745,6 +782,7 @@ func _stat_block(parent: VBoxContainer, right: bool, compact: bool) -> void:
 	name_labels.append(l)
 	hp_bars.append(_bar(parent, Rules.MAX_HP, Color(0.85, 0.25, 0.25), 12 if compact else 18))
 	mp_bars.append(_bar(parent, Rules.MAX_MP, Color(0.3, 0.6, 0.95), 6 if compact else 10))
+	gauge_bars.append(_bar(parent, Rules.GAUGE_MAX, ULT_GOLD, 6 if compact else 8) if ult else null)
 
 
 func _bar(parent: Control, max_value: int, color: Color, height: int) -> ProgressBar:
@@ -769,10 +807,11 @@ func _build_stat_ui() -> void:
 	name_labels.clear()
 	hp_bars.clear()
 	mp_bars.clear()
+	gauge_bars.clear()
 	var n: int = rules.fighters.size()
-	_stat_block(player_box, false, false)
+	_stat_block(player_box, false, false, Cards.ultimate_of(rules.fighters[0].char_id) != "")
 	for i in range(1, n):
-		_stat_block(enemy_box, true, n > 2)
+		_stat_block(enemy_box, true, n > 2, Cards.ultimate_of(rules.fighters[i].char_id) != "")
 	for i in n:
 		hp_bars[i].max_value = rules.fighters[i].max_hp
 	# 적이 여럿이면 오른쪽 위 상태 칸이 길어지니 전투 기록 패널을 그만큼 내린다
@@ -813,6 +852,8 @@ func _build_hand() -> void:
 				b.add_theme_font_size_override("font_size", 14)
 				moves.add_child(b)
 			"attack":
+				if card.get("ultimate", false):
+					_style_button(b, ULT_GOLD)  # 필살기는 금빛 테두리로 다른 공격과 구분
 				b.custom_minimum_size = Vector2(big_w, 74)
 				b.clip_text = compact_cards  # 폭을 줄였을 때만 — 보통 폭에선 자르면 "MP 15" 의 숫자가 잘렸다
 				b.add_theme_font_size_override("font_size", 14 if not compact_cards else 12)
@@ -855,6 +896,8 @@ func _card_text(card: Dictionary, facing := 1) -> String:
 			return "기 모으기 +%d" % Rules.REST_MP
 		"heal":
 			return "%s +%d ·MP%d" % [card.name, card.heal, card.cost]
+	if card.get("ultimate", false):
+		return "★%s\n필살 · 피해 %d" % [card.name, card.dmg] if not compact_cards else "★%s\n필살 %d" % [card.name, card.dmg]
 	if compact_cards:
 		return "%s\n%d ·MP%d" % [card.name, card.dmg, card.cost]
 	return "%s\n피해 %d · MP %d" % [card.name, card.dmg, card.cost]
@@ -869,6 +912,8 @@ func _new_game() -> void:
 	# 싱글은 늘 플레이어가 먼저 행동하고, 대전은 단계마다 먼저 움직이는 쪽을 번갈아 공평하게
 	rules.alternate = Game.mode == "versus"
 	practice = Game.mode == "practice"
+	if practice and Cards.ultimate_of(rules.fighters[0].char_id) != "":
+		rules.fighters[0].gauge = Rules.GAUGE_MAX
 	target_menu.visible = practice
 	if practice:
 		target_menu.select(maxi(0, Game.practice_targets().find(Game.practice_target)))
@@ -966,13 +1011,15 @@ func _who(i: int) -> String:
 func _show_current_stats() -> void:
 	var hp := []
 	var mp := []
+	var gauge := []
 	for f in rules.fighters:
 		hp.append(f.hp)
 		mp.append(f.mp)
-	_show_stats(hp, mp)
+		gauge.append(f.gauge)
+	_show_stats(hp, mp, gauge)
 
 
-func _show_stats(hp: Array, mp: Array) -> void:
+func _show_stats(hp: Array, mp: Array, gauge: Array = []) -> void:
 	for i in hp.size():
 		var label := "나 · %s" % Cards.CHARACTERS[rules.fighters[i].char_id].name if i == 0 else _who(i)
 		if practice and i > 0:
@@ -982,6 +1029,12 @@ func _show_stats(hp: Array, mp: Array) -> void:
 		name_labels[i].text = "%s    HP %d   MP %d" % [label, hp[i], mp[i]]
 		hp_bars[i].value = hp[i]
 		mp_bars[i].value = mp[i]
+		if gauge_bars[i] != null and i < gauge.size():
+			var full: bool = gauge[i] >= Rules.GAUGE_MAX
+			gauge_bars[i].value = gauge[i]
+			gauge_bars[i].modulate = Color(1.5, 1.4, 1.0) if full else Color.WHITE  # 가득 차면 밝게 — 필살기를 쓸 수 있다는 신호
+			if full:
+				name_labels[i].text += "   ★필살"
 		name_labels[i].modulate = Color(1, 1, 1, 0.45) if hp[i] <= 0 else Color.WHITE
 
 
@@ -1006,8 +1059,9 @@ func _refresh_hand() -> void:
 		var locked: bool = busy or rules.winner != -1
 		# 앞서 고른 카드를 쓴 뒤의 자리에서 보드 밖이라 못 가는 이동 카드는 고를 수 없다
 		var dead: bool = order == -1 and Cards.get_card(id).type == "move" and rules.first_dead_move(0, selected + [id]) != -1
-		b.disabled = locked or (order == -1 and (full or used + cost > mp or dead))
-		b.tooltip_text = "보드 밖이라 갈 수 없음" if dead else ""
+		var ult_wait: bool = Cards.get_card(id).get("ultimate", false) and rules.fighters[0].gauge < Rules.GAUGE_MAX
+		b.disabled = locked or (order == -1 and (full or used + cost > mp or dead or ult_wait))
+		b.tooltip_text = "보드 밖이라 갈 수 없음" if dead else ("필살 게이지가 가득 차야 씁니다 (%d/%d)" % [rules.fighters[0].gauge, Rules.GAUGE_MAX] if ult_wait else "")
 		# 방향이 들어간 표기(1인칭 이동 이름, 범위 그림)는 그 카드를 쓸 때의 예상 방향으로 —
 		# 고른 카드는 그 순번, 아직 안 고른 카드는 다음 순번. 앞서 고른 이동으로 적을 지나치면 바로 바뀐다(보드 미리보기와 같은 계산)
 		var slot := order if order != -1 else selected.size()
@@ -1115,7 +1169,8 @@ func _on_card_pressed(id: String) -> void:
 		return
 	if selected.size() >= Rules.CARDS_PER_TURN:
 		return
-	if rules.cost_of(selected + [id]) > rules.fighters[0].mp or rules.first_dead_move(0, selected + [id]) != -1:
+	if rules.cost_of(selected + [id]) > rules.fighters[0].mp or rules.first_dead_move(0, selected + [id]) != -1 \
+			or (Cards.get_card(id).get("ultimate", false) and rules.fighters[0].gauge < Rules.GAUGE_MAX):
 		return
 	selected.append(id)
 	Sound.play("select")
@@ -1139,6 +1194,7 @@ func _practice_use(id: String) -> void:
 	for f in rules.fighters:
 		f.hp = f.max_hp
 		f.mp = Rules.MAX_MP
+		f.gauge = Rules.GAUGE_MAX if Cards.ultimate_of(f.char_id) != "" else 0  # 체험장은 필살기도 늘 쓸 수 있게
 	rules.winner = -1
 	_show_current_stats()
 	busy = false
@@ -1508,6 +1564,10 @@ func _process(delta: float) -> void:
 	if fp and fp_free:
 		fp_yaw = wrapf(fp_yaw + _free_look_turn(delta), -PI, PI)
 	var target := _fp_xform() if fp else tp_xform
+	if not fp and tp_focus_w > 0.0:
+		# 필살기 준비: 3인칭 카메라가 쓰는 캐릭터 쪽으로 다가간다
+		var eye := tp_xform.origin.lerp(ult_focus + Vector3(0, 1.2, 0), 0.5)
+		target = tp_xform.interpolate_with(Transform3D(Basis(), eye).looking_at(ult_focus, Vector3.UP), tp_focus_w)
 	var k := 1.0 - exp(-delta * 8.0)
 	# 회전베기 중엔 보간 없이 바로 따른다 — 보간하면 180도를 넘는 순간 반대쪽(짧은 쪽)으로 되감긴다
 	cam_smooth = target if fp_spin != 0.0 else cam_smooth.interpolate_with(target, k)
@@ -1518,6 +1578,7 @@ func _process(delta: float) -> void:
 	cam.fov = clampf(cam_fov + fov_kick, 10.0, 120.0)
 	_update_view_frames()
 	_update_voxels()
+	_update_ult_dim(fp)
 	_apply_backdrop(fp)
 	if fp:
 		_update_fp_hud()
@@ -1816,6 +1877,31 @@ func _fp_attack_fx(card: Dictionary) -> void:
 			pt.tween_property(self, "fp_pitch", 1.6, 0.16).set_ease(Tween.EASE_OUT)
 			pt.tween_interval(0.12)
 			pt.tween_property(self, "fp_pitch", 0.0, 0.25).set_ease(Tween.EASE_IN_OUT)
+		"ult_sword":
+			# 몸은 제자리(카메라가 판 위를 지그재그로 날아다니면 어지럽다) — 칼만 빠르게 네 번 휘두르고 화면을 가르는 큰 X 섬광
+			vm.kill()
+			_fp_swings([["kesa", 0.04, 0.06], ["rise", 0.03, 0.06], ["cross_h", 0.03, 0.06], ["kesa", 0.03, 0.06]], 0.1, 0.22)
+			_fp_flash("x1", 0.5)
+			_fp_flash("x2", 0.56)
+		"ult_archer":
+			# 하늘을 겨눈 활로 빛 화살을 쏘아 올리고, 시선이 따라 올라갔다가 유성이 떨어지는 앞쪽을 내려다본다
+			var rest_tex := viewmodel.texture
+			viewmodel.texture = _make_viewmodel_up()
+			viewmodel.modulate = Color(1.6, 1.4, 0.9)
+			vm.tween_property(self, "vm_offset", Vector2(-120, -140), 0.12).set_ease(Tween.EASE_OUT)
+			vm.tween_property(self, "vm_offset", Vector2(-120, -100), 0.06)
+			vm.tween_interval(0.35)
+			vm.tween_callback(func() -> void:
+				viewmodel.texture = rest_tex
+				viewmodel.modulate = Color.WHITE)
+			vm.tween_property(self, "vm_offset", Vector2.ZERO, 0.25)
+			var pt := _tween()
+			pt.tween_property(self, "fp_pitch", 2.6, 0.15).set_ease(Tween.EASE_OUT)
+			pt.tween_interval(0.08)
+			# 유성이 떨어질 때(쏜 뒤 약 0.3초)엔 이미 앞쪽 판을 내려다보고 있어야 — 카메라 보간이 느려 일찍 내린다
+			pt.tween_property(self, "fp_pitch", -1.2, 0.15).set_ease(Tween.EASE_IN_OUT)
+			pt.tween_interval(0.5)
+			pt.tween_property(self, "fp_pitch", 0.0, 0.4)
 		"cross":
 			# 위에서 곧게 내려치고(세로 검광), 이어서 오른쪽에서 왼쪽으로 가로베기(가로 검광) — 3인칭 타이밍과 같게
 			vm.kill()
@@ -1931,6 +2017,13 @@ func _fp_path(kind: String) -> Callable:
 			var y0 := 0.62 if kind == "iai" else 0.55
 			return func(t: float) -> Vector2:
 				return Vector2(lerpf(w * 1.08, -w * 0.08, t), lerpf(h * y0, h * 0.45, t) - sin(PI * t) * h * 0.06)
+		"x1":
+			# 화면 왼쪽 위 → 오른쪽 아래 대각선(필살기 마무리 X 의 한 획)
+			return func(t: float) -> Vector2:
+				return Vector2(-w * 0.05, h * 0.02).lerp(Vector2(w * 1.05, h * 0.98), t)
+		"x2":
+			return func(t: float) -> Vector2:
+				return Vector2(w * 1.05, h * 0.02).lerp(Vector2(-w * 0.05, h * 0.98), t)
 		"thrust":
 			# 오른쪽 아래에서 정면 한가운데로 곧게
 			return func(t: float) -> Vector2:
@@ -2135,7 +2228,7 @@ func _play_step(ev: Dictionary) -> void:
 			_show_tag(i, cards[i])
 			await _play_attack(i, cards[i], ev)
 
-	_show_stats(ev.hp, ev.mp)
+	_show_stats(ev.hp, ev.mp, ev.get("gauge", []))
 	_log(_step_text(ev))
 	for j: int in ev.died:
 		_play_death(j)
@@ -2195,6 +2288,9 @@ func _play_attack(i: int, card: Dictionary, ev: Dictionary) -> void:
 			await _wait(0.35)
 		await _wait(0.2)
 		# 기술마다 다른 자세(attack_thrust 등). 그림이 없는 캐릭터는 char_art 가 attack 으로 채워 둔다
+		var ult: bool = card.get("ultimate", false)
+		if ult:
+			await _ult_prepare(i, card)
 		var pose := "attack_" + str(card.get("anim", ""))
 		sprites[i].play(pose if sprites[i].sprite_frames.has_animation(pose) else "attack")
 		if fp_me:
@@ -2206,6 +2302,10 @@ func _play_attack(i: int, card: Dictionary, ev: Dictionary) -> void:
 			landed = landed or tg.dmg > 0
 		if landed and card.get("anim", "") == "spin":
 			_hitstop(0.07)
+		if ult:
+			if landed:
+				_hitstop(0.12)
+			_ult_end()
 		await _wait(0.5)
 		_clear_tiles()
 		fp_face_lock = false
@@ -2300,6 +2400,10 @@ func _attack_anim(i: int, card: Dictionary, h: Dictionary) -> float:
 			return _volley(i, h)
 		"kick":
 			return _kick(i)
+		"ult_sword":
+			return _ult_sword(i, h)
+		"ult_archer":
+			return _ult_archer(i, h)
 		"pierce":
 			return _shoot_arrow(i, h, true)
 		"snipe":
@@ -2965,6 +3069,276 @@ func _kick(i: int) -> float:
 	if not (i == 0 and first_person and not overview):  # 1인칭의 내 발차기는 화면 아래에서 올라오는 다리로(_fp_attack_fx)
 		_glow_burst(base + Vector3(f * TILE * 0.6, -sprite_half[i] * 0.25, 0), Color(1, 0.95, 0.8), 0.6, 0.1)
 	return 0.12
+
+
+## 필살기 준비(ULT_PREP): 쓰는 캐릭터 둘레만 남기고 화면이 어두워지고(스포트라이트), 3인칭 카메라가 다가가며,
+## 기술 이름이 크게 뜨고 몸 주위로 기운이 모인다. 1인칭은 화면 가장자리가 어두워지며 무기가 빛나고 시야가 살짝 당겨진다.
+## 일반 공격과 "다른 급의 기술"로 읽히게 하려는 것 — 연출이 끝난 뒤 실제 동작(_ult_sword/_ult_archer)이 이어진다.
+func _ult_prepare(i: int, card: Dictionary) -> void:
+	var fp_me := i == 0 and first_person and not overview
+	var glow: Color = BLADE_GLOW if rules.fighters[i].char_id == "sword" else ULT_GOLD
+	ult_actor = i
+	ult_focus = step_pos[i]
+	card_tags[i].hide()  # 머리 위 기술 이름은 화면의 큰 이름표와 겹친다
+	var um: ShaderMaterial = ult_dim.material
+	um.set_shader_parameter("tint", glow)
+	um.set_shader_parameter("aspect", ui_root.size.x / maxf(ui_root.size.y, 1.0))
+	um.set_shader_parameter("radius", 0.22 if fp_me else 0.13)
+	ult_dim.show()
+	var dt := _tween()
+	dt.tween_method(func(v: float) -> void: um.set_shader_parameter("amount", v), 0.0, 1.0, 0.2)
+	_tween().tween_property(self, "tp_focus_w", 1.0, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	# 이름: 왼쪽에서 미끄러져 들어와 잠깐 머문다
+	ult_banner.text = "필살!  " + str(card.name)
+	ult_banner.show()
+	ult_banner.modulate.a = 0.0
+	ult_banner.pivot_offset = ult_banner.size / 2.0
+	ult_banner.scale = Vector2(1.4, 1.4)
+	var bt := _tween()
+	bt.tween_property(ult_banner, "modulate:a", 1.0, 0.12)
+	bt.parallel().tween_property(ult_banner, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	Sound.play("warn")
+	_tween().tween_callback(Sound.play.bind("rest")).set_delay(0.25)
+	# 모으는 자세: 검사는 발도술처럼 웅크리고, 궁수는 하늘을 겨눠 당긴다
+	var charge := "attack_iai" if rules.fighters[i].char_id == "sword" else "attack_volley"
+	if sprites[i].sprite_frames.has_animation(charge):
+		sprites[i].play(charge)
+		sprites[i].pause()
+		sprites[i].frame = 1 if charge == "attack_volley" else 0
+	if fp_me:
+		viewmodel.modulate = Color(glow.r * 1.8, glow.g * 1.8, glow.b * 1.8)
+		var ft := _tween()
+		ft.tween_property(self, "fov_kick", -8.0, ULT_PREP * 0.8).set_trans(Tween.TRANS_SINE)
+		ft.tween_property(self, "fov_kick", 3.0, 0.08)
+		ft.tween_property(self, "fov_kick", 0.0, 0.25)
+	else:
+		_ult_aura(i, glow)
+	await _wait(ULT_PREP)
+	var bo := _tween()
+	bo.tween_property(ult_banner, "modulate:a", 0.0, 0.25)
+	bo.tween_callback(ult_banner.hide)
+	if fp_me:
+		viewmodel.modulate = Color.WHITE
+	Sound.play("slam")
+	_shake(0.25)
+
+
+## 기를 다 모은 뒤 실제 동작이 나가는 동안엔 카메라와 스포트라이트를 범위 쪽으로 넓힌다 —
+## 쓰는 캐릭터에만 다가가 있으면 범위 끝이 화면 밖으로 잘려 무엇이 맞았는지 안 보였다.
+func _ult_show_range(center: Vector3) -> void:
+	var from := ult_focus
+	_tween().tween_method(func(v: float) -> void: ult_focus = from.lerp(center, v), 0.0, 1.0, 0.25).set_ease(Tween.EASE_OUT)
+	_tween().tween_property(self, "tp_focus_w", 0.55, 0.25)
+	ult_actor = -2  # 스포트라이트 중심도 ult_focus 로
+	var um: ShaderMaterial = ult_dim.material
+	_tween().tween_method(func(v: float) -> void: um.set_shader_parameter("radius", v), 0.13, 0.32, 0.25)
+
+
+## 필살기가 끝나면 스포트라이트·카메라를 원래대로.
+func _ult_end() -> void:
+	var um: ShaderMaterial = ult_dim.material
+	var dt := _tween()
+	dt.tween_method(func(v: float) -> void: um.set_shader_parameter("amount", v), 1.0, 0.0, 0.35)
+	dt.tween_callback(ult_dim.hide)
+	_tween().tween_property(self, "tp_focus_w", 0.0, 0.45).set_trans(Tween.TRANS_SINE)
+	ult_actor = -1
+
+
+## 스포트라이트 중심을 쓰는 캐릭터의 화면 자리에 맞춘다(움직이는 동안에도 따라가게).
+func _update_ult_dim(fp: bool) -> void:
+	if not ult_dim.visible:
+		return
+	var um: ShaderMaterial = ult_dim.material
+	var c := Vector2(0.5, 0.72)
+	var view := get_viewport().get_visible_rect().size
+	if ult_actor >= 0 and not (ult_actor == 0 and fp):
+		if not cam.is_position_behind(sprites[ult_actor].global_position):
+			c = cam.unproject_position(sprites[ult_actor].global_position) / view
+	elif ult_actor == -2 and not fp and not cam.is_position_behind(ult_focus):
+		c = cam.unproject_position(ult_focus) / view
+	um.set_shader_parameter("center", c)
+
+
+## 기운이 모이는 모습: 발밑에서 퍼지는 고리, 몸 둘레에서 솟는 빛 입자, 몸 뒤에서 커지는 빛.
+func _ult_aura(i: int, glow: Color) -> void:
+	var feet := step_pos[i] + Vector3(0, -sprite_half[i], 0)
+	var ring := _ring_plane(feet + Vector3(0, 0.05, 0))
+	var rm: ShaderMaterial = ring.material_override
+	rm.set_shader_parameter("full", true)
+	rm.set_shader_parameter("edge", glow)
+	var rt := _tween()
+	rt.tween_method(func(v: float) -> void:
+		rm.set_shader_parameter("r_in", lerpf(0.6, 0.2, v))
+		rm.set_shader_parameter("r_out", lerpf(0.7, 0.32, v))
+		rm.set_shader_parameter("fade", 0.9 * v), 0.0, 1.0, ULT_PREP).set_ease(Tween.EASE_IN)
+	rt.tween_callback(ring.queue_free)
+	var p := _particles(60, 0.7, Color(1, 1, 1), glow)
+	p.one_shot = false
+	p.explosiveness = 0.0
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
+	p.emission_ring_axis = Vector3.UP
+	p.emission_ring_radius = 0.9
+	p.emission_ring_inner_radius = 0.6
+	p.emission_ring_height = 0.1
+	p.direction = Vector3.UP
+	p.spread = 15.0
+	p.gravity = Vector3(0, 2.5, 0)
+	p.initial_velocity_min = 1.0
+	p.initial_velocity_max = 2.0
+	p.radial_accel_min = -3.0
+	p.radial_accel_max = -1.5
+	p.position = feet + Vector3(0, 0.1, 0)
+	p.emitting = true
+	var pt := _tween()
+	pt.tween_interval(ULT_PREP)
+	pt.tween_callback(func() -> void: p.emitting = false)
+	pt.tween_interval(0.8)
+	pt.tween_callback(p.queue_free)
+	var b := _glow_ball(glow, 1.0)
+	add_child(b)
+	b.position = step_pos[i] + Vector3(0, 0, -0.1)
+	var bt := _tween()
+	bt.tween_property(b, "scale", Vector3.ONE * 3.2, ULT_PREP).set_trans(Tween.TRANS_SINE)
+	bt.tween_property(b, "transparency", 1.0, 0.15)
+	bt.tween_callback(b.queue_free)
+
+
+## 섬광난무: 범위(앞 2열 × 3줄) 안을 잔상을 남기며 지그재그로 네 번 베고 돌아와, 범위 위에 큰 X 섬광.
+## 1인칭의 나는 몸이 제자리다(카메라가 판 위를 날아다니면 어지럽다) — 칼질과 X 섬광은 _fp_attack_fx 가 맡는다.
+func _ult_sword(i: int, h: Dictionary) -> float:
+	var s := sprites[i]
+	var base := step_pos[i]
+	var f := step_facing[i]
+	var fp_me := i == 0 and first_person and not overview
+	var me := sprite_tile(i)
+	var stops: Array[Vector3] = []
+	for off: Vector2i in [Vector2i(1, -1), Vector2i(2, 1), Vector2i(1, 1), Vector2i(2, -1)]:
+		var t := Vector2i(me.x + off.x * f, clampi(me.y + off.y, 0, Rules.ROWS - 1))
+		t.x = clampi(t.x, 0, Rules.COLS - 1)
+		stops.append(_stand(t, i))
+	const DASH := 0.07
+	var tw: Tween = null if fp_me else _motion(i)  # 1인칭의 나는 제자리 — 빈 트윈을 만들면 엔진 오류
+	var prev := base
+	for k in stops.size():
+		if not fp_me:
+			tw.tween_property(s, "position", stops[k], DASH)
+			_afterimage(i, DASH * k, DASH, prev, stops[k], 2)
+		_slash_at(stops[k] + Vector3(f * 0.3, 0.2, 0), f, DASH * (k + 1), k % 2 == 0)
+		_tween().tween_callback(Sound.play_at.bind("slash", stops[k], -3.0)).set_delay(DASH * (k + 1))
+		prev = stops[k]
+	if not fp_me:
+		tw.tween_property(s, "position", base, 0.1)
+	# 마무리: 범위 한가운데에 큰 X
+	var mid := Vector3(_world(Vector2i(clampi(me.x + f * 1, 0, Rules.COLS - 1), me.y)).x + f * TILE * 0.5, 1.0, base.z)
+	_ult_show_range(mid)
+	var t0 := DASH * stops.size() + 0.12
+	for k in 2:
+		var sp := Sprite3D.new()
+		sp.texture = _blade_tex("flash")
+		sp.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		sp.shaded = false
+		sp.no_depth_test = true
+		sp.pixel_size = TILE * 3.2 / sp.texture.get_width()
+		sp.rotation.z = deg_to_rad(35.0 if k == 0 else -35.0)
+		sp.position = mid
+		sp.modulate = Color(1, 1, 1, 0)
+		add_child(sp)
+		var xt := _tween()
+		xt.tween_interval(t0 + k * 0.06)
+		xt.tween_property(sp, "modulate:a", 1.0, 0.03)
+		xt.tween_property(sp, "modulate:a", 0.0, 0.5).set_ease(Tween.EASE_IN)
+		xt.tween_callback(sp.queue_free)
+	_glow_burst(mid, BLADE_GLOW, 2.2, t0 + 0.08)
+	_tween().tween_callback(_shake.bind(0.5)).set_delay(t0 + 0.08)
+	_tween().tween_callback(Sound.play_at.bind("slam", mid)).set_delay(t0 + 0.08)
+	return t0 + 0.12
+
+
+## 칼 궤적(초승달) 하나를 pos 에 delay 뒤 띄운다. up = 올려베기 방향, 아니면 내려베기.
+func _slash_at(pos: Vector3, f: int, delay: float, up: bool) -> void:
+	var sp := Sprite3D.new()
+	sp.texture = _blade_tex("rise" if up else "arc")
+	sp.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
+	sp.shaded = false
+	sp.no_depth_test = true
+	sp.flip_h = f < 0
+	sp.pixel_size = TILE * 1.2 / sp.texture.get_height()
+	sp.position = pos
+	sp.modulate = Color(1, 1, 1, 0)
+	add_child(sp)
+	var tw := _tween()
+	tw.tween_interval(delay)
+	tw.tween_property(sp, "modulate:a", 1.0, 0.02)
+	tw.tween_property(sp, "modulate:a", 0.0, 0.25).set_ease(Tween.EASE_IN)
+	tw.tween_callback(sp.queue_free)
+
+
+## 유성 화살비: 금빛 화살 한 발을 하늘로 쏘아 올리고, 범위(앞 3열 × 3줄) 칸마다 금빛 경고 고리가 깔린 뒤
+## 빛나는 큰 화살이 유성처럼 비스듬히 떨어져 칸마다 폭발한다.
+func _ult_archer(i: int, h: Dictionary) -> float:
+	var f := step_facing[i]
+	var fp_me := i == 0 and first_person and not overview
+	var bow := step_pos[i] + Vector3(f * 0.4, 0.4, 0)
+	if fp_me:
+		bow = sprites[0].position + Vector3(f * 1.2, 0.9, 0.2)
+	const LAUNCH := 0.3
+	const FALL := 0.24
+	var up := _make_arrow(ULT_GOLD)
+	up.position = bow
+	var sky := bow + Vector3(f * 1.5, 9.0, 0)
+	up.look_at(sky, Vector3.BACK)
+	_trail(up, ULT_GOLD, 0.18, 2.4)
+	var g := _glow_ball(ULT_GOLD, 1.2)
+	up.add_child(g)
+	g.position = Vector3(0, 0, -0.5)
+	var ut := _tween()
+	ut.tween_property(up, "position", sky, LAUNCH).set_ease(Tween.EASE_IN)
+	ut.tween_callback(up.queue_free)
+	Sound.play_at("volley", bow)
+	_recoil(i)
+	var n: int = h.tiles.size()
+	var mid := Vector3.ZERO
+	for t: Vector2i in h.tiles:
+		mid += _world(t)
+	_ult_show_range((mid / maxf(n, 1)).lerp(step_pos[i], 0.25))
+	for k in n:
+		var ground := _world(h.tiles[k])
+		var warn := _ring_plane(ground + Vector3(0, 0.03, 0))
+		warn.scale = Vector3(0.4, 1, 0.4)
+		var wm: ShaderMaterial = warn.material_override
+		wm.set_shader_parameter("full", true)
+		wm.set_shader_parameter("r_in", 0.6)
+		wm.set_shader_parameter("r_out", 0.9)
+		wm.set_shader_parameter("edge", ULT_GOLD)
+		wm.set_shader_parameter("core", Color(1, 0.95, 0.7))
+		wm.set_shader_parameter("fade", 0.0)
+		var at := LAUNCH + k * 0.05
+		var wt := _tween()
+		wt.tween_method(func(v: float) -> void: wm.set_shader_parameter("fade", v), 0.0, 0.9, LAUNCH * 0.6)
+		wt.tween_interval(at - LAUNCH * 0.6 + FALL)
+		wt.tween_method(func(v: float) -> void: wm.set_shader_parameter("fade", v), 0.9, 0.0, 0.3)
+		wt.tween_callback(warn.queue_free)
+		var land := ground + Vector3(0, 0.1, 0)
+		var from := land + Vector3(-f * 2.2, 7.0, rng.randf_range(-0.6, 0.6))
+		var m := _make_arrow(Color(1, 0.95, 0.75))
+		m.scale = Vector3.ONE * 1.8
+		m.position = from
+		m.look_at(land, Vector3.BACK)
+		m.visible = false
+		_trail(m, ULT_GOLD, 0.14, 1.6)
+		var mg := _glow_ball(ULT_GOLD, 0.9)
+		m.add_child(mg)
+		mg.position = Vector3(0, 0, -0.5)
+		var mt := _tween()
+		mt.tween_interval(at)
+		mt.tween_callback(m.show)
+		mt.tween_property(m, "position", land, FALL).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		mt.tween_callback(m.queue_free)
+		_glow_burst(land + Vector3(0, 0.4, 0), ULT_GOLD, 1.6, at + FALL)
+		_tween().tween_callback(_dust.bind(land)).set_delay(at + FALL)
+		_tween().tween_callback(Sound.play_at.bind("arrow_hit", land, -6.0, 0.15)).set_delay(at + FALL)
+		_tween().tween_callback(_shake.bind(0.12)).set_delay(at + FALL)
+	return LAUNCH + FALL + maxi(n - 1, 0) * 0.05 + 0.08
 
 
 ## 저격: 무릎 꿇고 오래 겨눈다(SNIPE_AIM) — 활에서 목표까지 붉은 조준선이 깜빡이다 또렷해지고 화살촉이 반짝인다.

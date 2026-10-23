@@ -15,6 +15,10 @@ const REST_MP := 25
 const MP_REGEN := 10  # 턴이 끝날 때마다 회복. 없으면 MP 가 바닥난 뒤 기 모으기만 반복하는 턴이 길어진다
 const GUARD_BLOCK := 15
 const CARDS_PER_TURN := 3
+# 필살 게이지: 피해를 주거나 받으면 찬다(받을 때 더 — 몰릴수록 역전 수단이 빨리 온다). 가득 차면 필살기 카드를 쓸 수 있고 쓰면 0
+const GAUGE_MAX := 100
+const GAUGE_PER_DEALT := 1.0
+const GAUGE_PER_TAKEN := 1.4
 # 적 수 → 시작 행. 여럿이면 오른쪽 끝 열에 위아래로 벌려 세워, 처음부터 한 줄로 겹치지 않게
 const ENEMY_ROWS := {1: [1], 2: [0, 2], 3: [0, 1, 2]}
 
@@ -28,6 +32,7 @@ class Fighter:
 	var hp := MAX_HP
 	var mp := START_MP
 	var extra: Array[String] = []  # 스테이지 보상으로 얻어 손패에 더해진 카드
+	var gauge := 0  # 필살 게이지(0~GAUGE_MAX). 필살기가 있는 캐릭터만 쓴다
 
 	func alive() -> bool:
 		return hp > 0
@@ -42,6 +47,7 @@ class Fighter:
 		f.hp = hp
 		f.mp = mp
 		f.extra = extra.duplicate()
+		f.gauge = gauge
 		return f
 
 
@@ -125,6 +131,9 @@ func is_valid_selection(idx: int, cards: Array) -> bool:
 		if not h.has(id) or seen.has(id):
 			return false
 		seen[id] = true
+	for id: String in cards:
+		if Cards.get_card(id).get("ultimate", false) and fighters[idx].gauge < GAUGE_MAX:
+			return false  # 필살기는 턴 시작에 게이지가 가득 차 있어야
 	return cost_of(cards) <= fighters[idx].mp and first_dead_move(idx, cards) == -1
 
 
@@ -274,9 +283,14 @@ func _resolve_step(ids: Array, step: int) -> Dictionary:
 							continue
 						var d := maxi(0, int(cards[i].dmg) - block_of[j])
 						foe.hp = maxi(0, foe.hp - d)
+						_add_gauge(foe, d * GAUGE_PER_TAKEN)
+						if not cards[i].get("ultimate", false):  # 필살기로 준 피해로는 다시 차지 않는다
+							_add_gauge(f, d * GAUGE_PER_DEALT)
 						targets.append({"to": j, "dmg": d})
 						if not foe.alive():
 							died.append(j)
+					if cards[i].get("ultimate", false):
+						f.gauge = 0
 					var first: Dictionary = targets[0] if not targets.is_empty() else {}
 					hits.append({"from": i, "tiles": tiles, "targets": targets, "hit": not targets.is_empty(),
 						"dmg": first.get("dmg", 0)})
@@ -292,14 +306,21 @@ func _resolve_step(ids: Array, step: int) -> Dictionary:
 	return ev
 
 
-## 지금 모두의 자리·방향·HP·MP.
+## 필살기가 있는 캐릭터만 게이지가 찬다(몬스터는 쓰지 않으니 0 그대로 — 화면에 막대도 없다).
+func _add_gauge(f: Fighter, amount: float) -> void:
+	if Cards.ultimate_of(f.char_id) != "":
+		f.gauge = mini(GAUGE_MAX, f.gauge + roundi(amount))
+
+
+## 지금 모두의 자리·방향·HP·MP·필살 게이지.
 func _state() -> Dictionary:
-	var st := {"pos": [], "facing": [], "hp": [], "mp": []}
+	var st := {"pos": [], "facing": [], "hp": [], "mp": [], "gauge": []}
 	for f in fighters:
 		st.pos.append(f.pos)
 		st.facing.append(f.facing)
 		st.hp.append(f.hp)
 		st.mp.append(f.mp)
+		st.gauge.append(f.gauge)
 	return st
 
 
