@@ -45,9 +45,15 @@ const FP_SPIN_CAMERA := true
 const SPIN_TIME := 0.45
 const ORDER_MARK := ["①", "②", "③"]
 const BLADE_GLOW := Color(0.55, 0.8, 1.0)  # 검광 바깥 빛(칼날의 서늘한 푸른빛). 1·3인칭 같은 색
-const FREE_LOOK_EDGE := 90.0  # 자유 시점: 이 폭(px)의 좌우 가장자리 띠에 커서가 있으면 돈다
-const FREE_LOOK_BOTTOM := 190.0  # 화면 아래 이만큼(카드 패널 + 조작 안내 줄)은 가장자리로 치지 않는다
-const FREE_LOOK_SPEED := 2.2  # 최고 회전 속도(라디안/초)
+const DRAG_AREA_BOTTOM := 190.0  # 화면 아래 이만큼(카드 패널 + 조작 안내 줄)에서 누른 건 둘러보기로 치지 않는다
+const DRAG_START_PX := 6.0  # 이만큼 끌어야 둘러보기 시작 — 잠깐 누른 클릭으로 시점이 튀지 않게
+const DRAG_RAD_PER_PX := 0.0035  # 끈 거리(px)당 도는 각도. 화면 너비만큼 끌면 약 250도
+const FREE_LOOK_SPEED := 2.2  # Q/E 회전 속도(라디안/초)
+# 자유 시점 위아래 범위(기본 시선 기준, 도). 아래는 넓게 — 고개를 숙여 내 칸·바로 앞 범위 칸을 직접 보려고.
+# 위는 조금만 — 큰 보스를 올려다볼 정도. 판이 평평해 위쪽엔 볼 게 없고, 하늘만 보다 판을 놓치기 쉽다
+const LOOK_DOWN_MAX := 45.0
+const LOOK_UP_MAX := 15.0
+const FP_BASE_PITCH := -18.0  # 기본 시선이 내려다보는 각도(앞 4, 아래 1.3 과 같은 값)
 const MOVE_W := 92  # 손패 이동 버튼 폭
 const UTIL_W := 128  # 손패 방어·기 모으기·회복 버튼 폭
 const ATTACK_SFX := {"lunge": "slash", "slash": "slash", "thrust": "thrust", "cross": "slash", "rush": "thrust",
@@ -89,11 +95,15 @@ var minimap_always := false  # M: 3인칭에서도 미니맵 표시
 var preview_tiles: Array[Vector2i] = []  # 마우스를 올린 카드의 범위(미니맵도 같이 그린다)
 var attack_marks := {}  # 지금 공격 중인 칸 → 공격자 색. 1인칭에선 보드가 잘 안 보여 미니맵에도 칠한다
 var fp_target := 1  # 1인칭 카메라가 바라보는 적
-# 1인칭 자유 시점: 적을 자동으로 따라가지 않고 화면 가장자리·Q/E 로 고개를 돌린다.
+# 1인칭 자유 시점: 적을 자동으로 따라가지 않고, 위쪽 3D 화면을 잡고 끌거나 Q/E 로 고개를 돌린다.
 # 마우스를 움직이는 만큼 도는 방식(FPS)은 카드를 고르러 커서를 내릴 때 시점까지 내려가 버려서,
-# 커서가 가장자리에 머물 때만 돈다 — 가운데·카드 패널에선 시점이 움직이지 않는다
+# 누른 채 끌 때만 돈다. 화면 가장자리에 커서를 두면 돌던 방식은 가장자리 쪽 카드로 커서를 옮기다 의도치 않게 돌아서 뺐다
 var fp_free := false
+var drag_from := Vector2.ZERO  # 둘러보기용으로 누른 자리
+var drag_down := false  # 3D 화면에서 왼쪽 버튼을 누르고 있는 중
+var dragging := false  # DRAG_START_PX 넘게 끌어 실제로 둘러보는 중
 var fp_yaw := 0.0  # 자유 시점의 좌우 방향(라디안, 0 = -Z, 양수 = 왼쪽으로 돈다)
+var fp_look_pitch := 0.0  # 자유 시점에서 기본 시선보다 더 들거나(+) 숙인(-) 각도(도)
 var cam_button: Button
 var enemy_plans := {}  # 적 번호 → 이번 턴 카드. 엿보기를 하려면 내가 고르기 전에 정해져 있어야 한다
 var boss_states := {}  # 적 번호 → 패턴 보스의 진행(페이즈·턴)
@@ -542,7 +552,7 @@ func _build_ui() -> void:
 
 	# 전투 기록을 숨겨 둬서 조작 안내가 안 보이니, 카드 패널 바로 위에 한 줄로 늘 띄운다
 	var keys := Label.new()
-	keys.text = "V 1인칭   C 카메라 고정·자유   Q/E 둘러보기   Tab 볼 적   Space 잠깐 3인칭   M 미니맵   L 전투 기록"
+	keys.text = "V 1인칭   C 카메라 고정·자유   화면 끌기·Q/E 둘러보기   Tab 볼 적   Space 잠깐 3인칭   M 미니맵   L 전투 기록"
 	keys.add_theme_font_size_override("font_size", 13)
 	keys.add_theme_color_override("font_color", Color(1, 1, 1, 0.65))
 	keys.add_theme_constant_override("outline_size", 5)
@@ -1171,6 +1181,9 @@ func _result_button(text: String, accent: Color, action: Callable, size := Vecto
 ## _unhandled_input 이 아니라 _input 에서 받는다 — Tab 은 GUI 가 "다음 버튼으로 포커스 이동"으로 먼저 써버려서
 ## _unhandled_input 까지 오지 않는다(버튼 하이라이트만 옮겨 다니던 증상).
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton or event is InputEventMouseMotion:
+		_drag_look(event)
+		return
 	if not (event is InputEventKey and not event.echo):
 		return
 	if event.keycode == KEY_SPACE:
@@ -1253,12 +1266,14 @@ func _cycle_target() -> void:
 		var d := sprites[fp_target].position - sprites[0].position
 		if Vector2(d.x, d.z).length() > 0.1:
 			fp_yaw = _yaw_of(d)
+		fp_look_pitch = 0.0  # 둘러보다 길을 잃었을 때의 복구 키이기도 해서 위아래도 기본으로
 	_update_peek()
 
 
 ## 고정(적 자동 추적) ↔ 자유(가장자리·Q/E). 자유로 바꿀 땐 지금 보던 방향에서 시작해 화면이 튀지 않게.
 func _toggle_free_cam() -> void:
 	fp_free = not fp_free
+	fp_look_pitch = 0.0
 	if fp_free:
 		fp_yaw = _yaw_of(-cam_smooth.basis.z)
 	_update_cam_button()
@@ -1266,7 +1281,7 @@ func _toggle_free_cam() -> void:
 
 func _update_cam_button() -> void:
 	cam_button.text = "카메라: 자유 (C)" if fp_free else "카메라: 고정 (C)"
-	cam_button.tooltip_text = "화면 왼쪽·오른쪽 가장자리에 커서를 두거나 Q/E 로 둘러봅니다" if fp_free \
+	cam_button.tooltip_text = "화면을 끌거나 Q/E 로 둘러봅니다" if fp_free \
 		else "보고 있는 적을 자동으로 따라갑니다(Tab 으로 바꾸기)"
 
 
@@ -1275,23 +1290,44 @@ static func _yaw_of(v: Vector3) -> float:
 	return atan2(-v.x, -v.z)
 
 
-## 자유 시점에서 이번 프레임에 돌 양. 커서가 3D 화면(카드 패널 위)의 좌우 가장자리 띠 안에 있으면
-## 깊이 들어갈수록 빠르게 돈다. Q/E 는 같은 최고 속도.
+## 자유 시점에서 이번 프레임에 Q/E 로 돌 양.
 func _free_look_turn(delta: float) -> float:
 	var dir := 0.0
 	if Input.is_key_pressed(KEY_Q):
 		dir += 1.0
 	if Input.is_key_pressed(KEY_E):
 		dir -= 1.0
-	var area := ui_root.size
-	var m := ui_root.get_local_mouse_position()
-	# 카드 패널(아래 FREE_LOOK_BOTTOM)과 창 밖에서는 돌지 않는다 — 카드를 고르는 동안 시점이 흔들리지 않게
-	if DisplayServer.window_is_focused() and m.y > 0 and m.y < area.y - FREE_LOOK_BOTTOM and m.x >= 0 and m.x <= area.x:
-		if m.x < FREE_LOOK_EDGE:
-			dir += 1.0 - m.x / FREE_LOOK_EDGE
-		elif m.x > area.x - FREE_LOOK_EDGE:
-			dir -= 1.0 - (area.x - m.x) / FREE_LOOK_EDGE
-	return clampf(dir, -1.0, 1.0) * FREE_LOOK_SPEED * delta
+	return dir * FREE_LOOK_SPEED * delta
+
+
+## 1인칭 둘러보기: 위쪽 3D 화면을 왼쪽 버튼으로 잡고 좌우로 끌면 그만큼 고개가 돈다(지도 앱처럼 화면을 잡아 끄는 쪽 —
+## 오른쪽으로 끌면 풍경이 오른쪽으로 따라와 고개는 왼쪽으로). 위아래는 LOOK_DOWN_MAX·LOOK_UP_MAX 안에서만.
+## 카드 패널에서 누른 건 무시해 카드 선택과 섞이지 않는다. 끌기 시작하면 고정 모드여도 자유 모드로 바뀐다.
+func _drag_look(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			var m: Vector2 = event.position  # 이벤트 자리 — 실제 커서 대신 써야 흘려 넣은 입력(개발용 --drag)도 같은 경로
+			drag_down = first_person and not overview and not result_panel.visible \
+				and m.y < ui_root.size.y - DRAG_AREA_BOTTOM
+			drag_from = m
+			dragging = false
+		else:
+			if dragging:
+				get_viewport().set_input_as_handled()  # 끌기를 끝낸 뗌이 클릭으로 처리되지 않게
+			drag_down = false
+			dragging = false
+		return
+	if event is InputEventMouseMotion and drag_down:
+		if not dragging:
+			if event.position.distance_to(drag_from) < DRAG_START_PX:
+				return
+			dragging = true
+			if not fp_free:
+				_toggle_free_cam()  # 지금 보던 방향에서 이어서 돈다
+		fp_yaw = wrapf(fp_yaw + event.relative.x * DRAG_RAD_PER_PX, -PI, PI)
+		# 위아래도 같은 "화면 잡아 끌기": 아래로 끌면 풍경이 내려와 시선은 위로
+		fp_look_pitch = clampf(fp_look_pitch + rad_to_deg(event.relative.y * DRAG_RAD_PER_PX), -LOOK_DOWN_MAX, LOOK_UP_MAX)
+		get_viewport().set_input_as_handled()
 
 
 ## 1인칭에선 상대가 코앞이라 월드 크기 글자가 화면을 덮는다 → 거리와 무관한 화면 고정 크기로 바꾼다.
@@ -1346,8 +1382,9 @@ func _fp_xform() -> Transform3D:
 		if flat.length() > 0.6:
 			look = tp
 	if fp_free and not fp_face_lock:
-		# 자유 시점: 높이·내려다보는 각도는 고정 시점과 같고 좌우만 fp_yaw 로
-		look = eye + Vector3(-sin(fp_yaw), 0, -cos(fp_yaw)) * 4.0 + Vector3(0, -1.3, 0)
+		# 자유 시점: 좌우는 fp_yaw, 위아래는 기본 시선(FP_BASE_PITCH)에서 fp_look_pitch 만큼
+		var p := deg_to_rad(FP_BASE_PITCH + fp_look_pitch)
+		look = eye + (Vector3(-sin(fp_yaw), 0, -cos(fp_yaw)) * cos(p) + Vector3(0, sin(p), 0)) * 4.2
 	look.y += fp_pitch
 	var xf := Transform3D(Basis(), eye).looking_at(look, Vector3.UP)
 	if fp_spin != 0.0:
@@ -1363,7 +1400,7 @@ func _update_fp_hud() -> void:
 	var flat_right := Vector3(right.x, 0, right.z).normalized()
 	var hint := "   [Tab] 볼 적 바꾸기" if rules.foes_of(0).size() > 1 else ""
 	if fp_free:
-		hint = "   자유 시점: 가장자리·Q/E 로 둘러보기" + ("   [Tab] 적 쪽 보기" if rules.foes_of(0).size() > 0 else "")
+		hint = "   자유 시점: 화면 끌기·Q/E 로 둘러보기" + ("   [Tab] 적 쪽 보기" if rules.foes_of(0).size() > 0 else "")
 	# 1인칭의 이동 카드는 몸 기준(앞·뒤·왼·오)이라, 카메라가 적을 보느라 고개를 돌렸을 때 몸 앞이 어느 쪽인지만 알려준다
 	compass_label.text = "카드의 앞(공격 방향) %s%s" % [
 		_screen_arrow(Vector3(step_facing[0], 0, 0), flat_fwd, flat_right), hint]
@@ -2811,7 +2848,9 @@ func _log(text: String) -> void:
 func _handle_debug_args() -> void:
 	var shot := ""
 	var auto := false
-	var reward_shot := false  # --reward: 이긴 것으로 치고 결과(보상 선택) 화면을 찍는다
+	var reward_shot := false
+	var drag_test := 0.0
+	var drag_test_y := 0.0  # --reward: 이긴 것으로 치고 결과(보상 선택) 화면을 찍는다
 	var hand: Array = rules.hand(0)
 	var mine: Array = ["right", hand[Cards.COMMON.size()], "guard"]  # 오른쪽 + 첫 공격 + 방어 (캐릭터와 무관하게 유효)
 	var mids: Array[float] = [0.75]
@@ -2823,6 +2862,11 @@ func _handle_debug_args() -> void:
 			auto = true
 		elif a == "--fp":
 			_toggle_view()
+		elif a.begins_with("--drag="):
+			# 3D 화면을 잡고 끄는 입력을 실제 입력 경로로 흘려 넣는다(+ 오른쪽으로 끌기). --shot 과 함께
+			var dv := a.substr(7).split(",")  # "가로" 또는 "가로,세로"
+			drag_test = float(dv[0])
+			drag_test_y = float(dv[1]) if dv.size() > 1 else 0.0
 		elif a.begins_with("--look="):
 			# 자유 시점으로 바꾸고 지금 방향에서 이만큼(도, 양수 = 왼쪽) 돌린 장면을 찍으려고
 			_toggle_free_cam()
@@ -2882,6 +2926,26 @@ func _handle_debug_args() -> void:
 		while busy:
 			await get_tree().process_frame
 		await get_tree().create_timer(0.2).timeout
+	if drag_test != 0.0 or drag_test_y != 0.0:
+		var at := Vector2(ui_root.size.x / 2.0, ui_root.size.y * 0.35)
+		var press := InputEventMouseButton.new()
+		press.button_index = MOUSE_BUTTON_LEFT
+		press.pressed = true
+		press.position = at
+		Input.parse_input_event(press)
+		for k in 10:
+			var mv := InputEventMouseMotion.new()
+			mv.relative = Vector2(drag_test / 10.0, drag_test_y / 10.0)
+			at += mv.relative
+			mv.position = at
+			mv.button_mask = MOUSE_BUTTON_MASK_LEFT
+			Input.parse_input_event(mv)
+			await get_tree().process_frame
+		var up := InputEventMouseButton.new()
+		up.button_index = MOUSE_BUTTON_LEFT
+		up.position = at
+		Input.parse_input_event(up)
+		await get_tree().create_timer(0.6).timeout
 	if reward_shot:
 		rules.winner = 0
 		_show_result()
