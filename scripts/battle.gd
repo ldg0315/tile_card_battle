@@ -49,6 +49,29 @@ const FP_SPIN_CAMERA := true
 const SPIN_TIME := 0.45
 const ORDER_MARK := ["①", "②", "③"]
 const ULT_GOLD := Color(1.0, 0.78, 0.25)  # 필살 게이지·필살기 카드·필살기 이름의 금빛
+# 1인칭 기 모으기·치유: 가장자리에서 안쪽으로 번지는 기운 + 아래에서 위로 솟는 작은 빛 알갱이(격자마다 하나, 시간차)
+const REST_GLOW_SHADER := """
+shader_type canvas_item;
+uniform float amount = 0.0;
+uniform vec4 tint : source_color = vec4(0.45, 0.75, 1.0, 1.0);
+uniform float time0 = 0.0;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+void fragment() {
+	vec2 uv = UV;
+	float edge = min(min(uv.x, 1.0 - uv.x) * 1.6, min(uv.y, 1.0 - uv.y));
+	float glow = (1.0 - smoothstep(0.0, 0.28, edge)) * 0.55;
+	float t = TIME - time0;
+	vec2 cell = vec2(28.0, 16.0);
+	vec2 g = vec2(uv.x * cell.x, uv.y * cell.y + t * 9.0);
+	vec2 id = floor(g);
+	vec2 f = fract(g) - 0.5;
+	float h = hash(id);
+	float dotv = (h > 0.82) ? (1.0 - smoothstep(0.08, 0.22, length(f))) : 0.0;
+	dotv *= smoothstep(0.0, 0.5, 1.0 - min(uv.x, 1.0 - uv.x) * 2.2) * 0.9;
+	float a = clamp(glow + dotv, 0.0, 1.0) * amount;
+	COLOR = vec4(mix(tint.rgb, vec3(1.0), dotv * 0.6), a);
+}
+"""
 const ULT_PREP := 1.0  # 필살기 준비 연출 길이(초)
 # 필살기 준비: center(화면 비율 좌표) 둘레 radius 만 밝게 남기고 바깥을 어둡게, 가장자리에 기운 색을 살짝 섞는다
 const ULT_DIM_SHADER := """
@@ -201,8 +224,10 @@ var compass_label: Label
 var fp_act_label: Label
 var kick_leg: TextureRect  # 1인칭 발차기 때 화면 아래에서 올라오는 내 다리
 var scope: ColorRect  # 1인칭 저격 조준경(가운데만 뚫린 어둠 + 십자선)
+var rest_glow: ColorRect  # 1인칭 기 모으기·치유: 화면 가장자리 기운 + 솟는 빛 알갱이
 var ult_dim: ColorRect  # 필살기 준비: 쓰는 캐릭터 둘레만 남기고 화면을 어둡게(스포트라이트)
 var ult_banner: Label  # 필살기 이름("필살! 섬광난무")
+var round_banner: Label  # 라운드 시작 표시("ROUND 2"). 카드 3장을 고르는 한 번 = 한 라운드
 var ult_actor := -1  # 지금 필살기를 쓰는 전투원(스포트라이트 중심)
 var ult_focus := Vector3.ZERO  # 3인칭 카메라가 다가갈 점
 var tp_focus_w := 0.0  # 3인칭 카메라가 ult_focus 쪽으로 다가간 정도(0~1)
@@ -591,6 +616,16 @@ func _build_ui() -> void:
 	scope.hide()
 	root.add_child(scope)
 
+	rest_glow = ColorRect.new()
+	rest_glow.set_anchors_preset(Control.PRESET_FULL_RECT)
+	rest_glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var rgm := ShaderMaterial.new()
+	rgm.shader = Shader.new()
+	rgm.shader.code = REST_GLOW_SHADER
+	rest_glow.material = rgm
+	rest_glow.hide()
+	root.add_child(rest_glow)
+
 	ult_dim = ColorRect.new()
 	ult_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	ult_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -600,6 +635,9 @@ func _build_ui() -> void:
 	ult_dim.material = um
 	ult_dim.hide()
 	root.add_child(ult_dim)
+	round_banner = _overlay_label(root, 230, Color(1, 0.95, 0.85))
+	round_banner.add_theme_font_size_override("font_size", 64)
+	round_banner.add_theme_constant_override("outline_size", 14)
 	ult_banner = _overlay_label(root, 190, ULT_GOLD)
 	ult_banner.add_theme_font_size_override("font_size", 46)
 	ult_banner.add_theme_constant_override("outline_size", 12)
@@ -834,7 +872,8 @@ func _build_hand() -> void:
 		attacks += 1 if Cards.get_card(id).type == "attack" else 0
 	# 화면 1280 에서 여백·이동 묶음(4×92)·보조 묶음(2×128)·구분선 몫을 빼고 공격 카드끼리 나눈다
 	var room := 1280 - 40 - (MOVE_W * 4 + 12) - (UTIL_W * 2 + 4) - 40 - 8 * attacks
-	var big_w := clampi(room / maxi(attacks, 1), 84, 130)
+	# 최소 폭을 넉넉히 잡으면 공격 카드가 7장(궁수 보상 기술 + 필살기)일 때 화면 오른쪽을 넘쳤다
+	var big_w := clampi(room / maxi(attacks, 1), 70, 130)
 	compact_cards = big_w < 118
 	if attacks > 0:
 		hand_box.add_child(VSeparator.new())
@@ -856,7 +895,7 @@ func _build_hand() -> void:
 					_style_button(b, ULT_GOLD)  # 필살기는 금빛 테두리로 다른 공격과 구분
 				b.custom_minimum_size = Vector2(big_w, 74)
 				b.clip_text = compact_cards  # 폭을 줄였을 때만 — 보통 폭에선 자르면 "MP 15" 의 숫자가 잘렸다
-				b.add_theme_font_size_override("font_size", 14 if not compact_cards else 12)
+				b.add_theme_font_size_override("font_size", 14 if not compact_cards else (12 if big_w >= 84 else 11))
 				b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 				b.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
 				hand_box.add_child(b)
@@ -991,6 +1030,7 @@ func _new_game() -> void:
 	fp_target = _nearest_enemy()
 	_plan_enemies()
 	_refresh_hand()
+	_show_round_banner()
 
 
 func _who(i: int) -> String:
@@ -1047,7 +1087,7 @@ func _refresh_hand() -> void:
 	var names := PackedStringArray()
 	for k in Rules.CARDS_PER_TURN:
 		names.append("%d)%s %s" % [k + 1, _initiative_mark(k), _card_name(selected[k], k) if k < selected.size() else "—"])
-	slot_label.text = "   ".join(names) + "        MP 사용 %d / %d" % [used, mp]
+	slot_label.text = "R%d   " % (turn + 1) + "   ".join(names) + "        MP 사용 %d / %d" % [used, mp]
 	if selected.is_empty() and not busy:
 		slot_label.text += "    (고른 카드를 다시 누르면 해제)"
 	var full := selected.size() >= Rules.CARDS_PER_TURN
@@ -1271,7 +1311,7 @@ func _on_go() -> void:
 	_refresh_hand()
 	_update_peek()
 	warn_label.hide()
-	_log("\n[b]— %d턴 —[/b]" % turn)
+	_log("\n[b]— %d라운드 —[/b]" % turn)
 	var events: Array = rules.resolve_turn(plans)
 	for ev: Dictionary in events:
 		_show_step_banner(ev)
@@ -1286,7 +1326,33 @@ func _on_go() -> void:
 		_log("[color=#8fb8ff]턴 종료 — MP +%d[/color]" % Rules.MP_REGEN)
 		_show_current_stats()
 		_plan_enemies()
+		_show_round_banner()
 	_refresh_hand()
+
+
+## 라운드 시작 표시: 카드 3장을 고르기 시작할 때마다 "ROUND N"이 크게 튀어나왔다 사라진다(싱글·대전 모두, 화면 위 표시라 1·3인칭 공통).
+## 몇 번째 라운드인지 모르면 전투가 얼마나 길어졌는지, 보스 패턴이 몇 번째인지 감이 안 왔다. 기술 체험엔 라운드가 없어 띄우지 않는다.
+## 화면 가운데를 잠깐 덮을 뿐 입력은 막지 않는다 — 기다리지 않고 바로 카드를 골라도 된다.
+func _show_round_banner() -> void:
+	if practice:
+		return
+	var n := turn + 1
+	round_banner.text = "ROUND %d" % n
+	slot_label.tooltip_text = "%d라운드" % n
+	round_banner.show()
+	round_banner.pivot_offset = round_banner.size / 2.0
+	round_banner.modulate = Color(1, 1, 1, 0)
+	round_banner.scale = Vector2(2.2, 2.2)
+	var tw := create_tween()  # 연출 감속(ANIM_SLOW)과 무관하게 늘 같은 빠르기 — 고르는 시간을 잡아먹지 않게
+	tw.tween_property(round_banner, "modulate:a", 1.0, 0.15)
+	tw.parallel().tween_property(round_banner, "scale", Vector2.ONE, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.6)
+	tw.tween_property(round_banner, "modulate:a", 0.0, 0.3)
+	tw.parallel().tween_property(round_banner, "position:y", round_banner.position.y - 30.0, 0.3)
+	tw.tween_callback(func() -> void:
+		round_banner.hide()
+		round_banner.position.y += 30.0)
+	Sound.play("select")
 
 
 ## AI 는 내가 고르기 전에 카드를 정한다(내 선택을 보고 고르는 게 아니므로 공정성은 그대로).
@@ -2758,6 +2824,10 @@ func _ring_plane(pos: Vector3) -> MeshInstance3D:
 ## 몸도 잠깐 푸르게 빛나고 "+MP" 가 뜬다.
 ## 기본은 파란 기(기 모으기). 치유는 같은 연출을 초록으로 쓴다.
 func _rest_fx(i: int, tint := Color(0.45, 0.75, 1.0), deep := Color(0.1, 0.3, 1.0), text := "") -> void:
+	if i == 0 and first_person and not overview:
+		# 1인칭의 나: 몸 둘레 입자·빛기둥·고리는 카메라 바로 앞(안)에 생겨 화면에 큰 네모로 보였다 → 화면 연출로 대신한다
+		_fp_rest_fx(tint, deep, text)
+		return
 	var feet := step_pos[i] + Vector3(0, -sprite_half[i], 0)
 	var height := sprite_half[i] * 2.0
 
@@ -2856,6 +2926,34 @@ func _rest_fx(i: int, tint := Color(0.45, 0.75, 1.0), deep := Color(0.1, 0.3, 1.
 	lt.tween_property(l, "position:y", l.position.y + 1.0, 0.8)
 	lt.tween_property(l, "modulate:a", 0.0, 0.4).set_delay(0.4)
 	lt.chain().tween_callback(l.queue_free)
+
+
+## 1인칭 기 모으기·치유: 화면 가장자리가 기운 색으로 차올랐다 빠지고, 화면 아래에서 빛 알갱이가 위로 솟으며,
+## 무기가 같은 색으로 빛나고, 화면 가운데에 "+25 MP"(치유는 "+25 HP")가 떠오른다. 3인칭 _rest_fx 와 같은 길이(REST_TIME).
+func _fp_rest_fx(tint: Color, deep: Color, text: String) -> void:
+	var m: ShaderMaterial = rest_glow.material
+	m.set_shader_parameter("tint", tint)
+	m.set_shader_parameter("time0", Time.get_ticks_msec() / 1000.0)
+	rest_glow.show()
+	var gt := _tween()
+	gt.tween_method(func(v: float) -> void: m.set_shader_parameter("amount", v), 0.0, 1.0, 0.25)
+	gt.tween_interval(REST_TIME - 0.6)
+	gt.tween_method(func(v: float) -> void: m.set_shader_parameter("amount", v), 1.0, 0.0, 0.35)
+	gt.tween_callback(rest_glow.hide)
+	var vt := _tween()
+	vt.tween_property(viewmodel, "modulate", Color(tint.r * 1.6, tint.g * 1.6, tint.b * 1.6), 0.2)
+	vt.tween_property(viewmodel, "modulate", Color.WHITE, 0.45)
+	var l := _overlay_label(ui_root, 0, tint.lightened(0.3))
+	l.text = text if text != "" else "+%d MP" % Rules.REST_MP
+	l.add_theme_font_size_override("font_size", 34)
+	# 화면 가운데는 마주 본 적이 있어 글자가 몸에 묻혔다 — 아래쪽(무기 옆)에서 떠오르게
+	l.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	l.offset_top = -250
+	l.show()
+	var lt := _tween()
+	lt.tween_property(l, "offset_top", -310.0, 0.8).set_ease(Tween.EASE_OUT)
+	lt.parallel().tween_property(l, "modulate:a", 0.0, 0.4).set_delay(0.4)
+	lt.tween_callback(l.queue_free)
 
 
 ## 한 번 터지고 사라지는 빛 입자. 색은 from → to 로 바래며 투명해진다.
