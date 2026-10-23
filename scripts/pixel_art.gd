@@ -56,8 +56,27 @@ static func build(char_id: String) -> Dictionary:
 			var img := render(char_id, pose)
 			if pose.get("lie", false):
 				img = _lying(img)
+			elif pose.has("tilt"):
+				img = _tilt(img, float(pose.tilt))
 			texs.append(ImageTexture.create_from_image(img))
 		out[anim] = texs
+	return out
+
+
+## 몸 전체를 발밑을 축으로 기울인다(음수 = 뒤로 젖힘). 팔·활 각도만 바꾸면 몸통·머리는 정면을 본 채라
+## "하늘을 겨눈다"로 안 읽혀서, 그림째 돌린다. 도트가 뭉개지지 않게 가장 가까운 픽셀을 그대로 가져온다.
+static func _tilt(src: Image, deg: float) -> Image:
+	var out := Image.create(W, H, false, Image.FORMAT_RGBA8)
+	out.fill(Color(0, 0, 0, 0))
+	var pivot := Vector2(W / 2.0, GROUND)
+	var a := deg_to_rad(deg)  # 화면은 y 가 아래라 양수 회전이 시계 방향 — 음수면 반시계, 오른쪽을 본 몸이 뒤(왼쪽)로 젖혀진다
+	for y in H:
+		for x in W:
+			var v := (Vector2(x + 0.5, y + 0.5) - pivot).rotated(-a) + pivot
+			var sx := int(floor(v.x))
+			var sy := int(floor(v.y))
+			if sx >= 0 and sx < W and sy >= 0 and sy < H:
+				out.set_pixel(x, y, src.get_pixel(sx, sy))
 	return out
 
 
@@ -121,6 +140,26 @@ static func _archer_poses() -> Dictionary:
 			{"fa": 30.0, "fl": -25.0, "bl": 30.0}, {"fa": 30.0, "fl": 5.0, "bl": -5.0, "bob": 1.0}],
 		"attack": [{"fa": 90.0, "ba": 95.0, "draw": 0.4}, {"fa": 90.0, "ba": 85.0, "draw": 1.0, "lean": -1.0},
 			{"fa": 90.0, "ba": -35.0, "lean": 1.0}, {"fa": 60.0, "ba": -10.0}],
+		# 발차기: 무릎을 끌어올렸다가 몸을 뒤로 젖히며 앞으로 곧게 차고, 활은 아래로 내린다
+		"attack_kick": [{"fa": 20.0, "kick": 50.0, "lean": -1.0, "bl": -5.0},
+			{"fa": 0.0, "ba": -40.0, "kick": 95.0, "lean": -3.0, "bl": -12.0},
+			{"fa": 0.0, "ba": -40.0, "kick": 95.0, "lean": -3.0, "bl": -12.0}, {"fa": 30.0, "kick": 40.0, "lean": -1.0}],
+		# 하늘로 쏘기(화살비·산탄): 몸 전체를 뒤로 젖히고(tilt) 활을 하늘로 겨눠 당겼다가 놓는다
+		# 많이 젖히면 넘어지는 것처럼 보이고, 활을 수직으로 세우면 얼굴을 가리고 프레임 위로 잘려서
+		# 활은 비스듬히(약 45도) 겨누고 몸을 조금(최대 12도) 젖혀 합쳐서 하늘을 향하게 한다
+		"attack_volley": [{"fa": 122.0, "ba": 128.0, "draw": 0.4, "tilt": -6.0, "fl": 12.0, "bl": -8.0},
+			{"fa": 124.0, "ba": 122.0, "draw": 1.0, "tilt": -12.0, "fl": 14.0, "bl": -10.0},
+			{"fa": 124.0, "ba": -20.0, "tilt": -12.0, "fl": 14.0, "bl": -10.0},
+			{"fa": 110.0, "ba": -10.0, "tilt": -5.0}],
+		# 저격: 한쪽 무릎을 꿇고 낮게 앉아 끝까지 당긴 채 오래 겨눈다(앞쪽 프레임을 여러 장 — 겨누는 시간)
+		"attack_snipe": [{"fa": 90.0, "ba": 92.0, "draw": 0.5, "bob": 5.0, "fl": 35.0, "bl": -70.0, "lean": 1.0},
+			{"fa": 90.0, "ba": 88.0, "draw": 1.0, "bob": 5.0, "fl": 35.0, "bl": -70.0, "lean": 1.0, "eyes": "shut"},
+			{"fa": 90.0, "ba": 88.0, "draw": 1.0, "bob": 5.0, "fl": 35.0, "bl": -70.0, "lean": 1.0, "eyes": "shut"},
+			{"fa": 90.0, "ba": 88.0, "draw": 1.0, "bob": 5.0, "fl": 35.0, "bl": -70.0, "lean": 1.0, "eyes": "shut"},
+			{"fa": 90.0, "ba": 88.0, "draw": 1.0, "bob": 5.0, "fl": 35.0, "bl": -70.0, "lean": 1.0, "eyes": "shut"},
+			{"fa": 90.0, "ba": 88.0, "draw": 1.0, "bob": 5.0, "fl": 35.0, "bl": -70.0, "lean": 1.0, "eyes": "shut"},
+			{"fa": 90.0, "ba": -40.0, "bob": 5.0, "fl": 35.0, "bl": -70.0, "lean": -1.0},
+			{"fa": 70.0, "ba": -20.0, "bob": 4.0, "fl": 35.0, "bl": -70.0}],
 		"hit": [{"lean": -2.0, "fa": -15.0, "ba": -40.0, "eyes": "shut"},
 			{"lean": -1.0, "fa": 10.0, "eyes": "shut"}],
 		"guard": [{"bob": 3.0, "fa": 100.0, "ba": 60.0}],
@@ -168,6 +207,9 @@ static func render(char_id: String, p: Dictionary) -> Image:
 	j.hip_b = j.hip + Vector2(-1.5, 0)
 	j.foot_f = _foot(j.hip_f, p.fl)
 	j.foot_b = _foot(j.hip_b, p.bl)
+	# 발차기처럼 다리를 들어 올린 자세: 땅에 닿도록 맞추지 않고 다리 길이만큼 그 방향으로 뻗는다
+	if float(p.get("kick", -1.0)) >= 0.0:
+		j.foot_f = j.hip_f + _dir(float(p.kick)) * 15.0
 	j.hand_f = j.sh_f + _dir(p.fa) * ARM
 	# 시위를 당길수록 뒷손이 가슴 쪽으로 온다
 	j.hand_b = j.sh_b + _dir(p.ba) * ARM * (1.0 - 0.6 * float(p.draw))

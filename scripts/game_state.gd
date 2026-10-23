@@ -33,9 +33,10 @@ const CHAPTERS := [
 	]},
 ]
 const VERSUS_THEME := "forest"
-const PRACTICE_TARGET := "slime"  # 기술 체험의 연습 상대
+const PRACTICE_TARGET := "slime"  # 기술 체험의 기본 연습 상대
 
 var mode := ""  # "single" | "versus" | "practice"(기술 체험) | "" (전투 장면을 바로 실행)
+var practice_target := PRACTICE_TARGET  # 기술 체험에서 고른 연습 상대(다시 들어와도 유지)
 var mode_before_practice := ""  # 기술 체험에서 캐릭터 선택으로 돌아갈 때 원래 모드(싱글/대전)로 되돌리려고
 var player_char := "sword"
 var chapter := 0
@@ -87,6 +88,16 @@ func start_practice(char_id: String) -> void:
 	mode = "practice"
 	player_char = char_id
 	goto_battle()
+
+
+## 연습 상대로 고를 수 있는 캐릭터: 내 캐릭터를 뺀 전부(몬스터·보스·다른 플레이 캐릭터), cards.gd 순서대로.
+## 보스의 크기·피격 연출이나 큰 몸에 1인칭 카메라가 어떻게 보이는지도 여기서 확인한다.
+func practice_targets() -> Array[String]:
+	var out: Array[String] = []
+	for id: String in Cards.CHARACTERS:
+		if id != player_char:
+			out.append(id)
+	return out
 
 
 func end_practice() -> void:
@@ -160,7 +171,9 @@ func battle_config() -> Dictionary:
 			"theme": current_chapter().theme, "extra_cards": extra_cards, "max_hp_bonus": max_hp_bonus}
 	if mode == "practice":
 		# 상대는 아무것도 하지 않는 연습 상대. HP 는 넉넉하게(battle.gd 가 행동마다 다시 채운다)
-		return {"player": player_char, "enemies": [PRACTICE_TARGET], "enemy_hp": [999], "player_hp": -1,
+		if not practice_targets().has(practice_target):
+			practice_target = PRACTICE_TARGET
+		return {"player": player_char, "enemies": [practice_target], "enemy_hp": [999], "player_hp": -1,
 			"theme": VERSUS_THEME, "extra_cards": Cards.reward_cards_for(player_char), "max_hp_bonus": 0}
 	return {"player": player_char, "enemies": [versus_enemy()], "enemy_hp": [-1], "player_hp": -1, "theme": VERSUS_THEME,
 		"extra_cards": [], "max_hp_bonus": 0}
@@ -266,13 +279,15 @@ func choose_character(char_id: String) -> void:
 ##   -- --extra=heal,sword_iai  (--stage 와 함께) 보상 카드를 얻은 상태로
 ##   -- --map           싱글 스테이지 맵으로 바로
 ##   -- --versus        AI 대전으로 바로
-##   -- --practice      기술 체험으로 바로(--char 와 함께)
+##   -- --practice      기술 체험으로 바로(--char 와 함께, --target=king_slime 으로 연습 상대)
 func handle_skip_args() -> bool:
 	var args := OS.get_cmdline_user_args()
 	var extra := []
 	for a in args:
 		if a.begins_with("--char="):
 			player_char = a.substr(7)
+		elif a.begins_with("--target="):
+			practice_target = a.substr(9)
 		elif a.begins_with("--extra="):
 			extra = Array(a.substr(8).split(","))  # 보상 카드를 미리 얻은 상태로 시작(개발용)
 	for a in args:

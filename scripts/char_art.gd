@@ -24,6 +24,9 @@ const ANIMS := {
 	"attack_thrust": {"fps": 12.0, "loop": false, "fallback": "attack"},
 	"attack_cross": {"fps": 12.0, "loop": false, "fallback": "attack"},
 	"attack_iai": {"fps": 12.0, "loop": false, "fallback": "attack"},
+	"attack_kick": {"fps": 12.0, "loop": false, "fallback": "attack"},
+	"attack_volley": {"fps": 12.0, "loop": false, "fallback": "attack"},
+	"attack_snipe": {"fps": 10.0, "loop": false, "fallback": "attack"},
 }
 
 

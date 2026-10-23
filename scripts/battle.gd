@@ -44,11 +44,32 @@ const CARD_ACCENT := {
 const FP_SPIN_CAMERA := true
 const SPIN_TIME := 0.45
 const ORDER_MARK := ["①", "②", "③"]
+const PIERCE_RED := Color(1.0, 0.22, 0.15)  # 관통 화살의 붉은 빛
+# 1인칭 저격 조준경: 가운데 원만 뚫리고 바깥은 어둡게, 붉은 십자선(가운데는 비움)과 원 테두리. amount 로 나타나고 사라진다
+const SCOPE_SHADER := """
+shader_type canvas_item;
+uniform float amount = 0.0;
+uniform float aspect = 1.7778;
+void fragment() {
+	vec2 p = (UV - 0.5) * vec2(aspect, 1.0);
+	float r = length(p);
+	vec4 col = vec4(0.0, 0.0, 0.0, smoothstep(0.30, 0.33, r) * 0.88);
+	float cross_l = (abs(p.x) < 0.0016 || abs(p.y) < 0.0016) && r < 0.3 && r > 0.025 ? 1.0 : 0.0;
+	col = mix(col, vec4(1.0, 0.3, 0.25, 0.9), cross_l);
+	float ring = 1.0 - smoothstep(0.0, 0.004, abs(r - 0.315));
+	col = mix(col, vec4(0.9, 0.85, 0.7, 0.85), ring);
+	COLOR = vec4(col.rgb, col.a * amount);
+}
+"""
+const SNIPE_AIM := 0.6  # 저격을 겨누는 시간(초)
 const BLADE_GLOW := Color(0.55, 0.8, 1.0)  # 검광 바깥 빛(칼날의 서늘한 푸른빛). 1·3인칭 같은 색
+# 기술 체험에서 연습 상대를 한 칸씩 옮기는 키. 이동 카드처럼 보드(화면) 기준 방향.
+# 방향키를 쓴다 — IJKL 은 L 이 전투 기록 창 키와 겹쳐 오른쪽으로 옮길 수 없었다
+const PRACTICE_MOVE_KEYS := {KEY_UP: Vector2i(0, -1), KEY_DOWN: Vector2i(0, 1), KEY_LEFT: Vector2i(-1, 0), KEY_RIGHT: Vector2i(1, 0)}
 const DRAG_AREA_BOTTOM := 190.0  # 화면 아래 이만큼(카드 패널 + 조작 안내 줄)에서 누른 건 둘러보기로 치지 않는다
 const DRAG_START_PX := 6.0  # 이만큼 끌어야 둘러보기 시작 — 잠깐 누른 클릭으로 시점이 튀지 않게
-const DRAG_RAD_PER_PX := 0.0035  # 끈 거리(px)당 도는 각도. 화면 너비만큼 끌면 약 250도
-const FREE_LOOK_SPEED := 2.2  # Q/E 회전 속도(라디안/초)
+const DRAG_RAD_PER_PX := 0.0022  # 끈 거리(px)당 도는 각도. 화면 너비만큼 끌면 약 160도(250도는 너무 빨라 어지러웠다)
+const FREE_LOOK_SPEED := 1.4  # Q/E 회전 속도(라디안/초) — 한 바퀴에 약 4.5초
 # 자유 시점 위아래 범위(기본 시선 기준, 도). 아래는 넓게 — 고개를 숙여 내 칸·바로 앞 범위 칸을 직접 보려고.
 # 위는 조금만 — 큰 보스를 올려다볼 정도. 판이 평평해 위쪽엔 볼 게 없고, 하늘만 보다 판을 놓치기 쉽다
 const LOOK_DOWN_MAX := 45.0
@@ -57,7 +78,7 @@ const FP_BASE_PITCH := -18.0  # 기본 시선이 내려다보는 각도(앞 4, �
 const MOVE_W := 92  # 손패 이동 버튼 폭
 const UTIL_W := 128  # 손패 방어·기 모으기·회복 버튼 폭
 const ATTACK_SFX := {"lunge": "slash", "slash": "slash", "thrust": "thrust", "cross": "slash", "rush": "thrust",
-	"spin": "spin", "jump": "jump", "arrow": "arrow", "volley": "volley", "wave": "wave"}
+	"spin": "spin", "jump": "jump", "arrow": "arrow", "volley": "volley", "wave": "wave", "kick": "slash", "pierce": "arrow"}
 const REST_TIME := 0.8  # 기 모으기 연출 길이
 const DEATH_HOLD := 0.9  # 쓰러진 모습을 보여주는 시간. 바로 사라지면 무엇이 쓰러졌는지 놓친다
 const DEATH_FADE := 0.7
@@ -83,6 +104,7 @@ var cam: Camera3D
 var tp_xform: Transform3D  # 3인칭 카메라 자리
 var cam_smooth: Transform3D  # 흔들림을 빼고 부드럽게 따라가는 카메라 상태
 var shake_off := Vector3.ZERO
+var cam_fov := TP_FOV  # 반동을 뺀 시야각(시점 전환 때 부드럽게 바뀐다)
 var fov_kick := 0.0  # 1인칭 기술 반동으로 잠깐 좁아지는 시야
 var fp_spin := 0.0  # 1인칭 회전베기 중 카메라가 더 돌아간 각도(라디안)
 var fp_pitch := 0.0  # 1인칭 올려베기 중 시선을 들어 올리는 높이(바라보는 점을 위로 옮긴다)
@@ -105,6 +127,7 @@ var dragging := false  # DRAG_START_PX 넘게 끌어 실제로 둘러보는 중
 var fp_yaw := 0.0  # 자유 시점의 좌우 방향(라디안, 0 = -Z, 양수 = 왼쪽으로 돈다)
 var fp_look_pitch := 0.0  # 자유 시점에서 기본 시선보다 더 들거나(+) 숙인(-) 각도(도)
 var cam_button: Button
+var target_menu: OptionButton  # 기술 체험의 연습 상대 고르기
 var enemy_plans := {}  # 적 번호 → 이번 턴 카드. 엿보기를 하려면 내가 고르기 전에 정해져 있어야 한다
 var boss_states := {}  # 적 번호 → 패턴 보스의 진행(페이즈·턴)
 var facing_tex: ImageTexture
@@ -148,6 +171,8 @@ var step_label: Label  # 실행 중 "2단계 · 상대 먼저" — 지금 몇 �
 var hurt_flash: ColorRect
 var compass_label: Label
 var fp_act_label: Label
+var kick_leg: TextureRect  # 1인칭 발차기 때 화면 아래에서 올라오는 내 다리
+var scope: ColorRect  # 1인칭 저격 조준경(가운데만 뚫린 어둠 + 십자선)
 var viewmodel: TextureRect  # 1인칭에서 화면 오른쪽 아래에 보이는 내 무기
 var minimap: Control
 var vm_offset := Vector2.ZERO  # 무기 휘두르기 트윈은 이 값을 움직인다(위치는 매 프레임 흔들림과 합쳐 다시 계산되므로)
@@ -460,6 +485,35 @@ func _make_viewmodel(char_id: String) -> ImageTexture:
 	return ImageTexture.create_from_image(img)
 
 
+## 1인칭 하늘 쏘기용 활 그림: 시위를 당긴 손이 아래, 활대는 위에 가로로 휘고, 화살촉이 화면 위(하늘)를 가리킨다.
+func _make_viewmodel_up() -> ImageTexture:
+	if _vm_up_tex != null:
+		return _vm_up_tex
+	var img := Image.create(48, 48, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var wood := Color(0.5, 0.3, 0.12)
+	var pts: Array[Vector2] = []
+	for k in 9:
+		var t := lerpf(-PI / 2, PI / 2, k / 8.0)
+		pts.append(Vector2(24 + sin(t) * 18.0, 16 - cos(t) * 6.0))
+	for k in 8:
+		PixelArt._limb(img, pts[k], pts[k + 1], 2.6, wood)
+	var nock := Vector2(24, 34)
+	PixelArt._limb(img, pts[0], nock, 1.0, Color(0.92, 0.92, 0.86))
+	PixelArt._limb(img, pts[8], nock, 1.0, Color(0.92, 0.92, 0.86))
+	PixelArt._limb(img, nock, Vector2(24, 4), 1.5, Color(0.6, 0.4, 0.18))
+	PixelArt._disc(img, Vector2(24, 4), 1.6, Color(0.75, 0.78, 0.82))
+	PixelArt._limb(img, Vector2(36, 47), Vector2(25, 36), 6.0, Color(0.16, 0.5, 0.42))  # 당기는 팔(소매)
+	PixelArt._disc(img, nock + Vector2(0, 1), 3.2, Color(0.98, 0.84, 0.7))
+	PixelArt._disc(img, Vector2(24, 11), 2.6, Color(0.98, 0.84, 0.7))  # 활 잡은 손
+	PixelArt._outline(img)
+	_vm_up_tex = ImageTexture.create_from_image(img)
+	return _vm_up_tex
+
+
+var _vm_up_tex: ImageTexture
+
+
 func _rect(img: Image, x: int, y: int, w: int, h: int, c: Color) -> void:
 	img.fill_rect(Rect2i(x, y, w, h), c)
 
@@ -484,6 +538,25 @@ func _build_ui() -> void:
 	viewmodel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	viewmodel.hide()
 	root.add_child(viewmodel)
+
+	kick_leg = TextureRect.new()
+	kick_leg.texture = _make_kick_leg()
+	kick_leg.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	kick_leg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	kick_leg.size = Vector2(300, 300)
+	kick_leg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	kick_leg.hide()
+	root.add_child(kick_leg)
+
+	scope = ColorRect.new()
+	scope.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scope.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sm := ShaderMaterial.new()
+	sm.shader = Shader.new()
+	sm.shader.code = SCOPE_SHADER
+	scope.material = sm
+	scope.hide()
+	root.add_child(scope)
 
 	# 1인칭에서 내가 맞으면 내 스프라이트 대신 화면 전체를 붉게 번쩍인다
 	hurt_flash = ColorRect.new()
@@ -587,6 +660,17 @@ func _build_ui() -> void:
 	view_button.pressed.connect(_toggle_view)
 	row.add_child(view_button)
 	_style_button(view_button, Color(0.6, 0.85, 0.95))
+	target_menu = OptionButton.new()
+	target_menu.focus_mode = Control.FOCUS_NONE
+	target_menu.tooltip_text = "연습 상대 바꾸기 (T)"
+	for id: String in Game.practice_targets():
+		target_menu.add_item("상대: %s" % Cards.CHARACTERS[id].name)
+		target_menu.set_item_metadata(target_menu.item_count - 1, id)
+	target_menu.item_selected.connect(func(k: int) -> void: _set_practice_target(target_menu.get_item_metadata(k)))
+	target_menu.hide()  # 기술 체험에서만
+	row.add_child(target_menu)
+	row.move_child(target_menu, view_button.get_index())
+	_style_button(target_menu, Color(0.95, 0.6, 0.45))
 	cam_button = Button.new()
 	cam_button.focus_mode = Control.FOCUS_NONE
 	cam_button.pressed.connect(_toggle_free_cam)
@@ -776,8 +860,11 @@ func _new_game() -> void:
 	# 싱글은 늘 플레이어가 먼저 행동하고, 대전은 단계마다 먼저 움직이는 쪽을 번갈아 공평하게
 	rules.alternate = Game.mode == "versus"
 	practice = Game.mode == "practice"
+	target_menu.visible = practice
 	if practice:
-		rules.fighters[1].pos = Vector2i(2, 1)  # 연습 상대는 바로 앞 칸에 — 대부분의 기술이 첫 사용부터 맞게
+		target_menu.select(maxi(0, Game.practice_targets().find(Game.practice_target)))
+	if practice:
+		rules.fighters[1].pos = rules.fighters[0].pos + Vector2i(1, 0)  # 연습 상대는 바로 앞 칸에 — 대부분의 기술이 첫 사용부터 맞게
 		rules._update_facing()
 	rules.fighters[0].extra.assign(cfg.extra_cards)  # 이번 던전에서 보상으로 얻은 카드
 	rules.fighters[0].max_hp += cfg.max_hp_bonus
@@ -828,7 +915,8 @@ func _new_game() -> void:
 			" (보스)" if st.get("boss", false) else "", ", ".join(names)])
 	if practice:
 		_log("[b]기술 체험[/b] — 카드를 누르면 그 기술(이동 포함)을 바로 한 번 씁니다. HP·MP 는 줄지 않고 연습 상대는 움직이지 않습니다.")
-		_log("[b]R[/b] 방금 기술 다시   [b]V[/b] 1·3인칭   [b]C[/b] 카메라 고정·자유   [b]Esc[/b] 캐릭터 선택으로")
+		_log("[b]우클릭[/b] 칸을 눌러 연습 상대 옮기기   [b]방향키[/b] 연습 상대를 한 칸씩")
+		_log("[b]R[/b] 방금 기술 다시   [b]T[/b] 연습 상대 바꾸기(오른쪽 아래 메뉴)   [b]V[/b] 1·3인칭   [b]C[/b] 카메라 고정·자유   [b]Esc[/b] 캐릭터 선택으로")
 	_log("카드 3장을 순서대로 고르고 [b]실행[/b]을 누르세요.\n카드에 마우스를 올리면 범위가 노랗게 보입니다.")
 	_log("이동 카드는 화면 기준(←→↑↓)이고 다른 캐릭터에 막히지 않습니다(같은 칸 가능). 공격은 바라보는 방향(발밑 화살표)으로 나갑니다. 이동하면 착지하자마자, 이동하지 않았으면 턴이 끝날 때 가장 가까운 적을 향해 돌아섭니다. 같은 칸의 적은 어떤 공격에도 맞습니다. MP 는 턴마다 %d 회복합니다." % Rules.MP_REGEN)
 	if rules.alternate:
@@ -966,7 +1054,7 @@ func _body_move_name(card: Dictionary, facing: int) -> String:
 
 ## 기술 체험의 손패: 순번·MP 제한이 없고, 보드 밖으로 못 가는 이동만 막는다.
 func _refresh_practice_hand() -> void:
-	slot_label.text = "기술 체험 — 카드를 누르면 바로 사용   R 다시" + ("  (%s)" % Cards.get_card(last_practice).name if last_practice != "" else "")
+	slot_label.text = "기술 체험 — 카드를 누르면 바로 사용   R 다시   우클릭·방향키 상대 옮기기" + ("  (%s)" % Cards.get_card(last_practice).name if last_practice != "" else "")
 	go_button.text = "  나가기 (Esc)  "
 	go_button.disabled = false
 	var facing: int = rules.fighters[0].facing
@@ -1043,6 +1131,48 @@ func _practice_use(id: String) -> void:
 	_show_current_stats()
 	busy = false
 	_refresh_hand()
+
+
+## 화면 좌표가 가리키는 보드 칸(보드 밖이면 범위 밖 좌표). 카메라 광선이 바닥(y = 0)과 만나는 점으로 구한다.
+func _tile_at_screen(pos: Vector2) -> Vector2i:
+	var o := cam.project_ray_origin(pos)
+	var d := cam.project_ray_normal(pos)
+	if absf(d.y) < 0.001:
+		return Vector2i(-1, -1)
+	var hit := o + d * (-o.y / d.y)
+	return Vector2i(roundi(hit.x / TILE + (Rules.COLS - 1) / 2.0), roundi(hit.z / TILE + (Rules.ROWS - 1) / 2.0))
+
+
+## 기술 체험: 연습 상대를 칸 t 로 옮긴다(나와 같은 칸도 가능 — 같은 칸 규칙 시험용).
+## 옮긴 뒤엔 턴이 끝났을 때처럼 서로 가장 가까운 적을 보게 방향을 맞추고, 손패 표기(이동 가능·범위 그림)도 다시 그린다.
+func _move_practice_target(t: Vector2i) -> void:
+	if t == rules.fighters[1].pos:
+		return
+	rules.fighters[1].pos = t
+	rules._update_facing()
+	var ev := {"pos": [], "hp": []}
+	for f in rules.fighters:
+		ev.pos.append(f.pos)
+		ev.hp.append(f.hp)
+	for i in rules.fighters.size():
+		step_pos[i] = _stand(rules.fighters[i].pos, i) + _overlap_offset(i, ev)
+		sprites[i].position = step_pos[i]
+		step_facing[i] = rules.fighters[i].facing
+		sprites[i].flip_h = step_facing[i] < 0
+		_update_mark(i)
+	_dust(_world(t) + Vector3(0, 0.1, 0))
+	Sound.play("click")
+	_refresh_hand()
+
+
+## 기술 체험의 연습 상대를 바꾼다. 장면을 다시 열지 않고 전투만 새로 시작해 지금 시점(1·3인칭·자유 카메라)을 유지한다.
+func _set_practice_target(id: String) -> void:
+	if busy or id == "":
+		return
+	Game.practice_target = id
+	Sound.play("click")
+	_new_game()
+	fp_target = _nearest_enemy()
 
 
 ## 턴이 끝나면 규칙대로 모두 가장 가까운 적을 향해 돌아선다 — 다음 턴 미리보기는 이 방향 기준. 방어 자세도 푼다.
@@ -1207,6 +1337,17 @@ func _input(event: InputEvent) -> void:
 	elif event.keycode == KEY_R and practice and last_practice != "":
 		_on_card_pressed(last_practice)
 		get_viewport().set_input_as_handled()
+	elif event.keycode in PRACTICE_MOVE_KEYS and practice and not busy:
+		var t: Vector2i = rules.fighters[1].pos + PRACTICE_MOVE_KEYS[event.keycode]
+		if Rules.in_board(t):
+			_move_practice_target(t)
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_T and practice and not busy:
+		var ids := Game.practice_targets()
+		var k := (ids.find(Game.practice_target) + 1) % ids.size()
+		target_menu.select(k)
+		_set_practice_target(ids[k])
+		get_viewport().set_input_as_handled()
 	elif event.keycode == KEY_ESCAPE and practice and not busy:
 		Game.end_practice()
 		get_viewport().set_input_as_handled()
@@ -1304,6 +1445,14 @@ func _free_look_turn(delta: float) -> float:
 ## 오른쪽으로 끌면 풍경이 오른쪽으로 따라와 고개는 왼쪽으로). 위아래는 LOOK_DOWN_MAX·LOOK_UP_MAX 안에서만.
 ## 카드 패널에서 누른 건 무시해 카드 선택과 섞이지 않는다. 끌기 시작하면 고정 모드여도 자유 모드로 바뀐다.
 func _drag_look(event: InputEvent) -> void:
+	# 기술 체험: 보드 칸을 오른쪽 클릭하면 연습 상대가 그 칸으로(왼쪽 클릭은 카드·둘러보기에 이미 쓴다)
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed and practice and not busy \
+			and event.position.y < ui_root.size.y - DRAG_AREA_BOTTOM:
+		var t := _tile_at_screen(event.position)
+		if Rules.in_board(t):
+			_move_practice_target(t)
+			get_viewport().set_input_as_handled()
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			var m: Vector2 = event.position  # 이벤트 자리 — 실제 커서 대신 써야 흘려 넣은 입력(개발용 --drag)도 같은 경로
@@ -1347,7 +1496,10 @@ func _process(delta: float) -> void:
 	# 회전베기 중엔 보간 없이 바로 따른다 — 보간하면 180도를 넘는 순간 반대쪽(짧은 쪽)으로 되감긴다
 	cam_smooth = target if fp_spin != 0.0 else cam_smooth.interpolate_with(target, k)
 	cam.global_transform = Transform3D(cam_smooth.basis, cam_smooth.origin + shake_off)
-	cam.fov = lerpf(cam.fov, FP_FOV if fp else TP_FOV, k) + fov_kick
+	# 기본 시야각은 따로 보간하고 반동(fov_kick)은 매 프레임 더하기만 한다 — cam.fov 에 바로 더해 보간하면
+	# 반동이 프레임마다 누적돼, 저격처럼 크게 당기면 시야각이 1도 아래로 떨어져 엔진 오류가 났다
+	cam_fov = lerpf(cam_fov, FP_FOV if fp else TP_FOV, k)
+	cam.fov = clampf(cam_fov + fov_kick, 10.0, 120.0)
 	_apply_backdrop(fp)
 	if fp:
 		_update_fp_hud()
@@ -1484,7 +1636,7 @@ func _fp_attack_fx(card: Dictionary) -> void:
 	_tween().tween_callback(fp_act_label.hide).set_delay(0.7)
 	var anim: String = card.get("anim", "lunge")
 	var kick := -3.0 if anim in ["arrow", "volley", "wave"] else -7.0
-	if anim != "iai":  # 발도술은 뽑는 순간에 반동을 준다(아래)
+	if anim != "iai" and anim != "snipe":  # 발도술·저격은 놓는 순간에 반동을 준다(아래)
 		fov_kick = kick
 		_tween().tween_property(self, "fov_kick", 0.0, 0.35)
 	var vm := _tween()
@@ -1495,11 +1647,52 @@ func _fp_attack_fx(card: Dictionary) -> void:
 			vm.tween_property(self, "vm_offset", Vector2(-30, -18), 0.05)
 			vm.tween_property(self, "vm_offset", Vector2.ZERO, 0.2)
 		"volley":
-			# 하늘로 쏘아 올리니 활을 위로 치켜든다
-			vm.tween_property(viewmodel, "rotation_degrees", -28.0, 0.1)
-			vm.parallel().tween_property(self, "vm_offset", Vector2(-50, -110), 0.1)
-			vm.tween_property(viewmodel, "rotation_degrees", 0.0, 0.3)
-			vm.parallel().tween_property(self, "vm_offset", Vector2.ZERO, 0.3)
+			# 하늘을 겨눈 활 그림으로 바꿔(활대가 위에 눕고 화살이 하늘을 가리킴) 높이 치켜들고 시선도 따라 올렸다가,
+			# 화살이 떨어질 즈음 다시 내려 꽂히는 칸을 본다 — 3인칭의 위로 쏘는 자세(attack_volley)와 같은 동작.
+			# 그림을 돌리기만 하면 활이 옆으로 누운 채 올라가 "팔만 드는" 것처럼 보였다
+			var rest_tex := viewmodel.texture
+			viewmodel.texture = _make_viewmodel_up()
+			vm.tween_property(self, "vm_offset", Vector2(-120, -130), 0.12).set_ease(Tween.EASE_OUT)
+			vm.tween_property(self, "vm_offset", Vector2(-120, -100), 0.06)  # 놓는 순간의 반동
+			vm.tween_interval(0.3)  # 카메라가 부드럽게 따라 올라가느라 시선이 늦게 들리니, 그동안 하늘 겨눈 그림을 유지
+			vm.tween_callback(func() -> void: viewmodel.texture = rest_tex)
+			vm.tween_property(self, "vm_offset", Vector2.ZERO, 0.25)
+			var pt := _tween()
+			pt.tween_property(self, "fp_pitch", 2.4, 0.15).set_ease(Tween.EASE_OUT)
+			pt.tween_interval(0.12)
+			pt.tween_property(self, "fp_pitch", 0.0, 0.3).set_ease(Tween.EASE_IN_OUT)
+		"pierce":
+			# 시위를 당기는 동안 활이 붉게 달아오르고, 놓는 순간 앞으로 튕긴다
+			vm.tween_property(self, "vm_offset", Vector2(55, 35), 0.1)
+			vm.parallel().tween_property(viewmodel, "modulate", Color(1.8, 0.6, 0.5), 0.1)
+			vm.tween_property(self, "vm_offset", Vector2(-35, -20), 0.05)
+			vm.tween_property(self, "vm_offset", Vector2.ZERO, 0.2)
+			vm.parallel().tween_property(viewmodel, "modulate", Color.WHITE, 0.3)
+		"kick":
+			# 활을 아래로 비키고, 화면 아래에서 내 다리가 앞으로 뻗어 올라온다
+			vm.tween_property(self, "vm_offset", Vector2(80, 200), 0.08)
+			vm.tween_interval(0.16)
+			vm.tween_property(self, "vm_offset", Vector2.ZERO, 0.2)
+			_fp_kick_leg()
+		"snipe":
+			# 활을 끝까지 당긴 채 숨을 고르듯 시야가 확대되고 조준경이 덮인다(SNIPE_AIM) → 놓는 순간 확대가 풀리며 반동
+			vm.tween_property(self, "vm_offset", Vector2(70, 45), 0.25)
+			vm.tween_interval(SNIPE_AIM - 0.25)
+			vm.tween_property(self, "vm_offset", Vector2(-40, -25), 0.04)
+			vm.tween_property(self, "vm_offset", Vector2.ZERO, 0.25)
+			var zt := _tween()
+			zt.tween_property(self, "fov_kick", -30.0, 0.4).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+			zt.tween_interval(SNIPE_AIM - 0.4)
+			zt.tween_property(self, "fov_kick", 5.0, 0.05)
+			zt.tween_property(self, "fov_kick", 0.0, 0.3)
+			var sm: ShaderMaterial = scope.material
+			sm.set_shader_parameter("aspect", ui_root.size.x / maxf(ui_root.size.y, 1.0))
+			scope.show()
+			var st := _tween()
+			st.tween_method(func(v: float) -> void: sm.set_shader_parameter("amount", v), 0.0, 1.0, 0.3)
+			st.tween_interval(SNIPE_AIM - 0.3)
+			st.tween_method(func(v: float) -> void: sm.set_shader_parameter("amount", v), 1.0, 0.0, 0.15)
+			st.tween_callback(scope.hide)
 		"spin":
 			# 칼끝이 화면 오른쪽에서 왼쪽 끝까지 가로로 쓸고(검광), 카메라가 한 바퀴 돈다
 			vm.kill()  # 칼 움직임은 _fp_swings 가 맡는다(빈 트윈으로 두면 엔진 오류)
@@ -1669,6 +1862,35 @@ func _fp_blade_at(tip: Vector2) -> void:
 	viewmodel.rotation_degrees = VM_BLADE_ANGLE - rad_to_deg(atan2(-blade.y, blade.x))
 	var k := clampf(blade.length() / VM_BLADE_LEN, 0.8, 2.4)
 	viewmodel.scale = Vector2(k, k)
+
+
+## 1인칭 발차기: 화면 아래에서 다리가 앞(화면 가운데)으로 뻗어 올라왔다가 내려간다. 3인칭 _kick 과 같은 타이밍.
+func _fp_kick_leg() -> void:
+	var area := ui_root.size
+	var down := Vector2(area.x * 0.5 - 120, area.y + 20)
+	var up := Vector2(area.x * 0.5 - 170, area.y - 360)
+	kick_leg.position = down
+	kick_leg.show()
+	var tw := _tween()
+	tw.tween_interval(0.04)
+	tw.tween_property(kick_leg, "position", up, 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.14)
+	tw.tween_property(kick_leg, "position", down, 0.18).set_ease(Tween.EASE_IN)
+	tw.tween_callback(kick_leg.hide)
+
+
+## 1인칭 발차기 다리 그림(궁수 바지·장화). 화면 아래 오른쪽에서 가운데 위로 뻗은 다리, 장화 밑창이 앞을 향한다.
+func _make_kick_leg() -> ImageTexture:
+	var img := Image.create(48, 48, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	# 어두운 갈색 덩어리로만 보여 다리로 안 읽혔다 — 바지·장화·밑창을 밝기 차이로 나누고 밑창이 앞(위)을 보게
+	PixelArt._limb(img, Vector2(38, 48), Vector2(25, 24), 8.0, Color(0.5, 0.38, 0.27))
+	PixelArt._limb(img, Vector2(37, 48), Vector2(26, 27), 3.0, Color(0.62, 0.48, 0.34))
+	PixelArt._limb(img, Vector2(26, 27), Vector2(21, 11), 8.5, Color(0.36, 0.23, 0.15))
+	PixelArt._limb(img, Vector2(28, 25), Vector2(24, 14), 2.0, Color(0.5, 0.33, 0.2))
+	PixelArt._limb(img, Vector2(14, 9), Vector2(28, 7), 3.5, Color(0.16, 0.1, 0.07))
+	PixelArt._outline(img)
+	return ImageTexture.create_from_image(img)
 
 
 ## 1인칭 화면에 그어지는 흰 직선 궤적(delay 뒤에 나타나 사라짐).
@@ -1945,7 +2167,7 @@ func _on_anim_finished(i: int) -> void:
 ## 공격 연출을 시작하고, 공격이 닿기까지 걸리는 시간을 돌려준다(이 시간 뒤에 피격 반응).
 func _attack_anim(i: int, card: Dictionary, h: Dictionary) -> float:
 	var anim: String = card.get("anim", "lunge")
-	if anim != "iai":  # 발도술은 모으는 동안 조용하다가 뽑는 순간 소리가 난다(_iai)
+	if anim != "iai" and anim != "snipe":  # 발도술·저격은 모으는 동안 조용하다가 놓는 순간 소리가 난다
 		Sound.play_at(ATTACK_SFX.get(anim, "slash"), step_pos[i])
 	match anim:
 		"slash":
@@ -1971,6 +2193,12 @@ func _attack_anim(i: int, card: Dictionary, h: Dictionary) -> float:
 			return _shoot(i, h, wave_tex)
 		"volley":
 			return _volley(i, h)
+		"kick":
+			return _kick(i)
+		"pierce":
+			return _shoot_arrow(i, h, true)
+		"snipe":
+			return _snipe(i, h)
 	return _lunge(i, 0.35)
 
 
@@ -2486,7 +2714,7 @@ func _make_projectile(tex: Texture2D, flip: bool) -> Sprite3D:
 
 ## 입체 화살(촉이 -Z). 빌보드 그림은 1인칭에서 옆모습 그대로 날아가 어색해서, 어느 방향에서 봐도 맞게 보이도록
 ## 화살대·촉·깃을 메시로 만든다. look_at 으로 날아가는 쪽을 향하게 한다.
-func _make_arrow() -> Node3D:
+func _make_arrow(head_col := Color(0.82, 0.85, 0.9)) -> Node3D:
 	var root := Node3D.new()
 	var shaft := MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
@@ -2509,7 +2737,7 @@ func _make_arrow() -> Node3D:
 	head.mesh = cone
 	head.rotation_degrees.x = -90  # 원뿔 꼭지(+Y)를 -Z(앞)로
 	head.position = Vector3(0, 0, -0.5)
-	head.material_override = _flat_mat(Color(0.82, 0.85, 0.9))
+	head.material_override = _flat_mat(head_col)
 	root.add_child(head)
 	for size: Vector3 in [Vector3(0.15, 0.006, 0.18), Vector3(0.006, 0.15, 0.18)]:
 		var fl := MeshInstance3D.new()
@@ -2534,12 +2762,12 @@ func _flat_mat(c: Color) -> StandardMaterial3D:
 ## 화살 꼬리의 빛 띠: 화살 축을 따라 뒤로 길게 뻗으며 흐려지는 십자 모양 판 두 장.
 ## 입자로 뿌리면 1인칭에서 카메라 코앞에 생긴 입자가 커다란 사각형으로 보여서, 화살에 붙은 띠로 만든다
 ## (정면·뒤에선 거의 안 보이고 옆에서 보면 궤적이 된다).
-func _trail(arrow: Node3D) -> Node3D:
+func _trail(arrow: Node3D, col := Color(1, 0.95, 0.75), width := 0.07, length := 1.1) -> Node3D:
 	var root := Node3D.new()
 	var tex := GradientTexture2D.new()
 	var g := Gradient.new()
-	g.set_color(0, Color(1, 0.85, 0.5, 0.0))  # 꼬리 끝
-	g.set_color(1, Color(1, 0.95, 0.75, 0.75))  # 화살 쪽
+	g.set_color(0, Color(col, 0.0))  # 꼬리 끝
+	g.set_color(1, Color(col, 0.75))  # 화살 쪽
 	tex.gradient = g
 	tex.fill_from = Vector2(0, 0)
 	tex.fill_to = Vector2(0, 1)
@@ -2554,11 +2782,11 @@ func _trail(arrow: Node3D) -> Node3D:
 		wrap.rotation_degrees.z = roll
 		var quad := MeshInstance3D.new()
 		var qm := QuadMesh.new()
-		qm.size = Vector2(0.07, 1.1)
+		qm.size = Vector2(width, length)
 		quad.mesh = qm
 		quad.material_override = mat
 		quad.rotation_degrees.x = 90  # 판의 세로(+Y)를 화살 뒤쪽(+Z)으로 눕힌다
-		quad.position = Vector3(0, 0, 0.95)
+		quad.position = Vector3(0, 0, 0.4 + length / 2.0)
 		wrap.add_child(quad)
 		root.add_child(wrap)
 	arrow.add_child(root)
@@ -2567,23 +2795,40 @@ func _trail(arrow: Node3D) -> Node3D:
 
 ## 화살. 맞으면 처음 맞은 적에서 사라지고, 빗나가면 범위 끝 바닥에 비스듬히 꽂혔다가 사라진다.
 ## 1인칭에서 내가 쏘면 눈 바로 아래에서 출발해, 내 손을 떠나 멀어지는 뒷모습이 보인다.
-func _shoot_arrow(i: int, h: Dictionary) -> float:
+## pierce(관통 화살): 붉은 촉·붉은 빛 띠·촉을 감싼 붉은 빛으로, 맞은 적을 꿰뚫고 범위 끝까지 날아간다.
+func _shoot_arrow(i: int, h: Dictionary, pierce := false) -> float:
 	var f := step_facing[i]
 	var start := step_pos[i] + Vector3(f * 0.5, 0.15, 0)
 	if i == 0 and first_person:
 		start = sprites[0].position + Vector3(f * 0.35, 0.5, 0.15)
 	var stuck: bool = not h.hit
 	var end: Vector3
-	if h.hit:
+	if pierce:
+		stuck = false
+		var far: Vector2i = h.tiles[-1] if not h.tiles.is_empty() else sprite_tile(i)
+		end = _world(far) + Vector3(f * TILE * 0.9, 0, 0)
+		end.y = start.y
+	elif h.hit:
 		end = step_pos[h.targets[0].to] + Vector3(-f * 0.3, 0.1, 0)
 	elif not h.tiles.is_empty():
 		end = _world(h.tiles[-1]) + Vector3(f * 0.5, 0.08, 0)
 	else:
 		end = Vector3(start.x + f * TILE, 0.08, start.z)
-	var a := _make_arrow()
+	var a := _make_arrow(PIERCE_RED if pierce else Color(0.82, 0.85, 0.9))
 	a.position = start
 	a.look_at(end, Vector3.UP)
-	var trail := _trail(a)
+	# 1인칭에선 꼬리 띠가 눈앞에서 시작해 굵게 보이니 가늘게
+	var trail := _trail(a, PIERCE_RED, 0.07 if i == 0 and first_person else 0.16, 2.0) if pierce else _trail(a)
+	if pierce:
+		var glow := _glow_ball(PIERCE_RED, 0.7)
+		a.add_child(glow)
+		glow.position = Vector3(0, 0, -0.5)
+		if i == 0 and first_person and not overview:
+			# 1인칭에선 출발점이 눈앞이라 빛이 화면을 붉게 덮었다 — 조금 멀어진 뒤에 켠다(시위 쪽 붉은빛은 활 그림이 맡는다)
+			glow.visible = false
+			_tween().tween_callback(glow.show).set_delay(0.06)
+		else:
+			_glow_burst(start, PIERCE_RED, 1.4, 0.0)
 	var t := 0.12 + start.distance_to(end) / TILE * 0.07
 	var tw := _tween()
 	tw.tween_property(a, "position", end, t)
@@ -2595,7 +2840,166 @@ func _shoot_arrow(i: int, h: Dictionary) -> float:
 		tw.tween_property(a, "scale", Vector3.ZERO, 0.25)
 	tw.tween_callback(a.queue_free)
 	_recoil(i)
+	if pierce and h.hit:
+		# 피해는 처음 맞는 적에 닿는 순간 — 화살은 그 뒤로 계속 날아간다
+		var first := step_pos[h.targets[0].to]
+		return t * clampf(absf(first.x - start.x) / maxf(absf(end.x - start.x), 0.01), 0.1, 1.0)
 	return t
+
+
+## 발차기: 살짝 뛰어들며 무릎을 끌어올렸다 앞으로 곧게 차고(attack_kick 자세), 발끝에서 충격이 터진다.
+func _kick(i: int) -> float:
+	var s := sprites[i]
+	var base := step_pos[i]
+	var f := step_facing[i]
+	var tw := _motion(i)
+	tw.tween_property(s, "position", base + Vector3(f * TILE * 0.22, 0.12, 0), 0.1).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.14)
+	tw.tween_property(s, "position", base, 0.18)
+	if not (i == 0 and first_person and not overview):  # 1인칭의 내 발차기는 화면 아래에서 올라오는 다리로(_fp_attack_fx)
+		_glow_burst(base + Vector3(f * TILE * 0.6, -sprite_half[i] * 0.25, 0), Color(1, 0.95, 0.8), 0.6, 0.1)
+	return 0.12
+
+
+## 저격: 무릎 꿇고 오래 겨눈다(SNIPE_AIM) — 활에서 목표까지 붉은 조준선이 깜빡이다 또렷해지고 화살촉이 반짝인다.
+## 놓는 순간 화살이 거의 순식간에 꽂히고, 지나간 자리에 흰 금빛 잔광 줄기와 화면 흔들림이 남는다.
+## 다른 화살(날아가는 게 보이는 속도)과 달리 "오래 겨누고 → 한순간"의 리듬이 저격답게.
+func _snipe(i: int, h: Dictionary) -> float:
+	var f := step_facing[i]
+	var bow := step_pos[i] + Vector3(f * 0.55, 0.05, 0)
+	if i == 0 and first_person:
+		bow = sprites[0].position + Vector3(f * 0.35, 0.5, 0.15)
+	var end: Vector3
+	if h.hit:
+		end = step_pos[h.targets[0].to] + Vector3(-f * 0.2, 0.05, 0)
+	elif not h.tiles.is_empty():
+		end = _world(h.tiles[-1]) + Vector3(f * TILE * 0.6, 0, 0)
+		end.y = bow.y
+	else:
+		end = bow + Vector3(f * TILE, 0, 0)
+	var fp_me := i == 0 and first_person and not overview
+	var laser := _beam(bow, end, Color(1, 0.18, 0.12), 0.012)
+	if fp_me:
+		laser.visible = false  # 1인칭은 조준경 십자선이 조준선 노릇을 한다(눈앞에서 시작하는 선은 화면을 가른다)
+	var lm: StandardMaterial3D = laser.get_meta("mat")
+	var lt := _tween()
+	for k in 4:  # 깜빡이며 점점 또렷하게 — "겨누는 중"
+		lt.tween_property(lm, "albedo_color:a", 0.25 + k * 0.18, 0.07)
+		lt.tween_property(lm, "albedo_color:a", 0.08, 0.06)
+	lt.tween_property(lm, "albedo_color:a", 0.9, 0.08)
+	lt.tween_interval(maxf(SNIPE_AIM - 0.6, 0.0))
+	lt.tween_callback(laser.queue_free)
+	var glint := _glow_ball(Color(1, 0.95, 0.7), 0.45)
+	glint.visible = not fp_me
+	add_child(glint)
+	glint.position = bow + Vector3(f * 0.3, 0, 0)
+	var gt := _tween()
+	gt.tween_property(glint, "scale", Vector3.ONE * 1.6, SNIPE_AIM * 0.5).set_trans(Tween.TRANS_SINE)
+	gt.tween_property(glint, "scale", Vector3.ONE * 0.6, SNIPE_AIM * 0.5).set_trans(Tween.TRANS_SINE)
+	gt.tween_callback(glint.queue_free)
+	var tw := _tween()
+	tw.tween_interval(SNIPE_AIM)
+	tw.tween_callback(_snipe_release.bind(i, bow, end))
+	return SNIPE_AIM + 0.07
+
+
+func _snipe_release(i: int, bow: Vector3, end: Vector3) -> void:
+	var fp_me := i == 0 and first_person and not overview
+	if fp_me:
+		bow = bow.lerp(end, 0.35)  # 잔광 줄기·충격을 눈앞이 아니라 앞쪽에서 시작 — 화면을 노랗게 덮지 않게
+	Sound.play_at("arrow", bow)
+	_shake(0.22)
+	_recoil(i)
+	var a := _make_arrow(Color(1, 0.9, 0.55))
+	a.position = bow
+	a.look_at(end, Vector3.UP)
+	_trail(a, Color(1, 0.92, 0.6), 0.1, 1.6)
+	var at := _tween()
+	at.tween_property(a, "position", end, 0.06)
+	at.tween_callback(a.queue_free)
+	var streak := _beam(bow, end, Color(1, 0.92, 0.65), 0.05)
+	var sm: StandardMaterial3D = streak.get_meta("mat")
+	sm.albedo_color.a = 1.0
+	var st := _tween()
+	st.tween_property(sm, "albedo_color:a", 0.0, 0.45).set_ease(Tween.EASE_IN)
+	st.tween_callback(streak.queue_free)
+	if not fp_me:
+		_glow_burst(bow, Color(1, 0.9, 0.6), 1.0, 0.0)
+	_glow_burst(end, Color(1, 0.9, 0.6), 1.0, 0.06)
+
+
+## 빛 덩어리(가산 혼합 빌보드): 가운데가 밝고 가장자리로 사라지는 원. 화살촉 빛·충격·반짝임에 쓴다.
+func _glow_ball(col: Color, size: float) -> MeshInstance3D:
+	if _glow_tex == null:
+		var g := Gradient.new()
+		g.set_color(0, Color(1, 1, 1, 1))
+		g.set_color(1, Color(1, 1, 1, 0))
+		_glow_tex = GradientTexture2D.new()
+		_glow_tex.gradient = g
+		_glow_tex.fill = GradientTexture2D.FILL_RADIAL
+		_glow_tex.fill_from = Vector2(0.5, 0.5)
+		_glow_tex.fill_to = Vector2(1.0, 0.5)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.no_depth_test = true
+	mat.albedo_texture = _glow_tex
+	mat.albedo_color = col
+	var q := QuadMesh.new()
+	q.size = Vector2(size, size)
+	var mi := MeshInstance3D.new()
+	mi.mesh = q
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+
+var _glow_tex: GradientTexture2D
+
+
+## 빛이 delay 뒤 확 퍼지며 사라지는 충격(발차기 발끝, 활 시위, 저격 착탄).
+func _glow_burst(pos: Vector3, col: Color, size: float, delay: float) -> void:
+	var b := _glow_ball(col, size)
+	add_child(b)
+	b.position = pos
+	b.visible = false
+	var bt := _tween()
+	bt.tween_interval(delay)
+	bt.tween_callback(b.show)
+	bt.tween_property(b, "scale", Vector3.ONE * 2.2, 0.18).set_ease(Tween.EASE_OUT)
+	bt.parallel().tween_property(b, "transparency", 1.0, 0.18)
+	bt.tween_callback(b.queue_free)
+
+
+## from → to 를 잇는 가는 빛 막대(조준선·잔광 줄기). 색·투명도는 get_meta("mat") 로 바꾼다(처음엔 투명).
+func _beam(from: Vector3, to: Vector3, col: Color, radius: float) -> Node3D:
+	var root := Node3D.new()
+	add_child(root)
+	root.position = from
+	root.look_at(to, Vector3.UP)
+	var length := from.distance_to(to)
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = radius
+	cyl.bottom_radius = radius
+	cyl.height = length
+	cyl.radial_segments = 6
+	cyl.rings = 1
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(col, 0.0)
+	var mi := MeshInstance3D.new()
+	mi.mesh = cyl
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.rotation_degrees.x = 90
+	mi.position = Vector3(0, 0, -length / 2.0)
+	root.add_child(mi)
+	root.set_meta("mat", mat)
+	return root
 
 
 ## 발사체(화살·초음파). 맞으면 처음 맞은 적 앞에서, 빗나가면 사거리 끝 칸까지 날아간다.
@@ -2621,6 +3025,9 @@ func _shoot(i: int, h: Dictionary, tex: Texture2D) -> float:
 func _volley(i: int, h: Dictionary) -> float:
 	var f := step_facing[i]
 	var bow := step_pos[i] + Vector3(f * 0.4, 0.35, 0)
+	var fp_me := i == 0 and first_person and not overview
+	if fp_me:
+		bow = sprites[0].position + Vector3(f * 1.2, 0.9, 0.2)  # 눈앞에서 솟으면 화살대가 화면을 가렸다
 	const LAUNCH := 0.25
 	const FALL := 0.22
 	for k in 3:
@@ -2850,6 +3257,7 @@ func _handle_debug_args() -> void:
 	var auto := false
 	var reward_shot := false
 	var drag_test := 0.0
+	var rclick_test := Vector2i(-1, -1)
 	var drag_test_y := 0.0  # --reward: 이긴 것으로 치고 결과(보상 선택) 화면을 찍는다
 	var hand: Array = rules.hand(0)
 	var mine: Array = ["right", hand[Cards.COMMON.size()], "guard"]  # 오른쪽 + 첫 공격 + 방어 (캐릭터와 무관하게 유효)
@@ -2862,6 +3270,10 @@ func _handle_debug_args() -> void:
 			auto = true
 		elif a == "--fp":
 			_toggle_view()
+		elif a.begins_with("--rclick="):
+			# 칸(열,행)을 오른쪽 클릭하는 입력을 흘려 넣는다(기술 체험의 연습 상대 옮기기 확인용)
+			var rv := a.substr(9).split(",")
+			rclick_test = Vector2i(int(rv[0]), int(rv[1]))
 		elif a.begins_with("--drag="):
 			# 3D 화면을 잡고 끄는 입력을 실제 입력 경로로 흘려 넣는다(+ 오른쪽으로 끌기). --shot 과 함께
 			var dv := a.substr(7).split(",")  # "가로" 또는 "가로,세로"
@@ -2926,6 +3338,14 @@ func _handle_debug_args() -> void:
 		while busy:
 			await get_tree().process_frame
 		await get_tree().create_timer(0.2).timeout
+	if rclick_test.x >= 0:
+		await get_tree().create_timer(1.2).timeout  # 앞서 누른 카드 연출이 끝난 뒤(연출 중엔 옮기지 않는다)
+		var rc := InputEventMouseButton.new()
+		rc.button_index = MOUSE_BUTTON_RIGHT
+		rc.pressed = true
+		rc.position = cam.unproject_position(_world(rclick_test))
+		Input.parse_input_event(rc)
+		await get_tree().create_timer(0.3).timeout
 	if drag_test != 0.0 or drag_test_y != 0.0:
 		var at := Vector2(ui_root.size.x / 2.0, ui_root.size.y * 0.35)
 		var press := InputEventMouseButton.new()

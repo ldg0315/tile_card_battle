@@ -44,7 +44,7 @@ const CHARACTERS := {
 				"range": [Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0)]},
 			"archer_volley": {"name": "화살비", "anim": "volley", "type": "attack", "cost": 25, "dmg": 20,
 				"range": [Vector2i(2, -1), Vector2i(2, 0), Vector2i(2, 1)]},
-			"archer_kick": {"name": "발차기", "anim": "lunge", "type": "attack", "cost": 5, "dmg": 10,
+			"archer_kick": {"name": "발차기", "anim": "kick", "type": "attack", "cost": 5, "dmg": 10,
 				"range": [Vector2i(1, 0)]},
 		},
 	},
@@ -78,7 +78,7 @@ const CHARACTERS := {
 	"king_slime": {
 		"name": "킹슬라임",
 		"hp": 80,
-		"scale": 1.6,
+		"scale": 2.6,  # 1인칭에서 가까이 서면 고개를 살짝 들어야 왕관이 보일 만큼 — 장 보스의 위압감
 		"attacks": {
 			"king_tackle": {"name": "몸통박치기", "anim": "lunge", "type": "attack", "cost": 10, "dmg": 15,
 				"range": [Vector2i(1, 0)]},
@@ -166,11 +166,11 @@ const REWARDS := {
 			"range": [Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0)]},
 	},
 	"archer": {
-		"archer_pierce": {"name": "관통 화살", "anim": "arrow", "type": "attack", "cost": 25, "dmg": 28,
+		"archer_pierce": {"name": "관통 화살", "anim": "pierce", "type": "attack", "cost": 25, "dmg": 28,
 			"range": [Vector2i(1, 0), Vector2i(2, 0), Vector2i(3, 0)]},
 		"archer_spread": {"name": "산탄 화살", "anim": "volley", "type": "attack", "cost": 20, "dmg": 15,
 			"range": [Vector2i(1, -1), Vector2i(1, 0), Vector2i(1, 1), Vector2i(2, -1), Vector2i(2, 0), Vector2i(2, 1)]},
-		"archer_snipe": {"name": "저격", "anim": "arrow", "type": "attack", "cost": 35, "dmg": 45,
+		"archer_snipe": {"name": "저격", "anim": "snipe", "type": "attack", "cost": 35, "dmg": 45,
 			"range": [Vector2i(3, 0)]},
 	},
 	"common": {
