@@ -30,17 +30,38 @@ const ANIMS := {
 }
 
 
-## 캐릭터 동작 프레임. 메타 "smooth" 에 부드럽게 확대할지가 들어 있다(is_smooth).
+## 캐릭터 동작 프레임. 메타 "smooth" 에 부드럽게 확대할지, 메타 "front" 에 정면 그림 프레임(없으면 null)이 들어 있다.
+## 정면 그림: art/<캐릭터>/<동작>_front_<프레임수>.png 또는 임시 도트의 "<동작>_front". 1인칭에서 마주 볼 때 쓴다.
+## 정면이 없는 동작은 옆모습을 그대로 넣어, 보는 각도가 바뀌어도 어떤 동작이든 끊기지 않게 한다.
 static func build_frames(char_id: String) -> SpriteFrames:
+	var frames := _build(char_id, "")
+	var front := _build(char_id, "_front", frames)
+	frames.set_meta("front", front if front.get_meta("has_front", false) else null)
+	return frames
+
+
+static func front_of(frames: SpriteFrames) -> SpriteFrames:
+	# get_meta 의 기본값 null 은 "기본값 없음"으로 취급돼 키가 없으면 엔진 오류가 난다(정면 없는 캐릭터) — has_meta 로 먼저 본다
+	return frames.get_meta("front") if frames.has_meta("front") else null
+
+
+## suffix = "" 이면 옆모습, "_front" 면 정면. side 를 주면 정면이 없는 동작은 옆모습 프레임으로 채운다.
+static func _build(char_id: String, suffix: String, side: SpriteFrames = null) -> SpriteFrames:
 	var frames := SpriteFrames.new()
 	var generated := {}
 	var smooth := _smooth_setting(char_id)
+	var has_front := false
 	for anim: String in ANIMS:
-		var texs := load_strip(char_id, anim, smooth)
+		var texs := load_strip(char_id, anim + suffix, smooth)
 		if texs.is_empty():
 			if generated.is_empty():
 				generated = PixelArt.build(char_id)
-			texs.assign(generated.get(anim, []))
+			texs.assign(generated.get(anim + suffix, []))
+		if side != null:
+			if texs.is_empty():
+				texs = _frames_of(side, anim)
+			else:
+				has_front = true
 		if texs.is_empty() and ANIMS[anim].has("fallback"):
 			texs = _frames_of(frames, ANIMS[anim].fallback)  # fallback 은 ANIMS 에서 앞에 있어 이미 채워져 있다
 		frames.add_animation(anim)
@@ -49,6 +70,7 @@ static func build_frames(char_id: String) -> SpriteFrames:
 		for t in texs:
 			frames.add_frame(anim, t)
 	frames.set_meta("smooth", smooth == 1)
+	frames.set_meta("has_front", has_front)
 	return frames
 
 

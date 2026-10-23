@@ -3,6 +3,7 @@ extends RefCounted
 ## 관절 각도로 포즈를 정하는 작은 리그로 그리고 외곽선은 자동으로 두른다 —
 ## 프레임마다 픽셀을 손으로 찍지 않고도 여러 동작을 같은 비율로 뽑으려는 것.
 ## 각도는 0 = 아래, 90 = 앞(오른쪽), 180 = 위. 캐릭터는 오른쪽을 본다(왼쪽은 화면에서 flip).
+## 좌우 대칭인 몬스터(FRONT_CHARS)는 정면 그림("<동작>_front")도 같은 포즈로 만든다 — 1인칭에서 마주 볼 때 쓴다.
 
 const W := 56  # 칼·활이 앞으로 뻗어도 잘리지 않게 몸보다 넓게. 몸은 가로 중앙이라 flip 해도 제자리
 const H := 48
@@ -36,6 +37,10 @@ const BASE_POSE := {
 }
 
 
+# 정면 그림을 만드는 캐릭터. 대칭형이라 같은 포즈 값으로 정면을 그릴 수 있다(사람형은 아직 옆모습만)
+const FRONT_CHARS := ["slime", "king_slime", "mushroom", "bat"]
+
+
 static func build(char_id: String) -> Dictionary:
 	var poses: Dictionary
 	match char_id:
@@ -60,6 +65,15 @@ static func build(char_id: String) -> Dictionary:
 				img = _tilt(img, float(pose.tilt))
 			texs.append(ImageTexture.create_from_image(img))
 		out[anim] = texs
+		if char_id in FRONT_CHARS:
+			# 정면: 같은 포즈에 front 만 켠다 — 프레임 수가 옆모습과 같아야 보는 각도가 바뀌어도 동작이 끊기지 않는다
+			var fronts: Array[Texture2D] = []
+			for over: Dictionary in poses[anim]:
+				var pose := BASE_POSE.duplicate()
+				pose.merge(over, true)
+				pose.front = true
+				fronts.append(ImageTexture.create_from_image(render(char_id, pose)))
+			out[anim + "_front"] = fronts
 	return out
 
 
@@ -374,6 +388,20 @@ static func _eyes(img: Image, c: Vector2, state: String, eye := EYE) -> void:
 			_px(img, ex + 1, ey, Color.WHITE)
 
 
+## 정면 눈: c 를 가운데로 gap 만큼 벌려 좌우 대칭으로(옆모습 _eyes 는 앞쪽으로 몰려 있다).
+static func _eyes_front(img: Image, c: Vector2, state: String, gap: int, eye := EYE) -> void:
+	var ey := int(c.y)
+	for ex: int in [int(c.x) - gap - 1, int(c.x) + gap - 1]:
+		if state == "shut":
+			_px(img, ex, ey + 1, eye)
+			_px(img, ex + 1, ey + 1, eye)
+		else:
+			_px(img, ex, ey, eye)
+			_px(img, ex, ey + 1, eye)
+			_px(img, ex + 1, ey + 1, eye)
+			_px(img, ex + 1, ey, Color.WHITE)
+
+
 ## 킹슬라임은 같은 몸에 파란색 + 왕관. 화면 크기는 cards.gd 의 scale 로 키운다.
 static func _draw_slime(img: Image, p: Dictionary, king: bool) -> void:
 	var sq: float = p.get("sq", 0.0)
@@ -382,16 +410,22 @@ static func _draw_slime(img: Image, p: Dictionary, king: bool) -> void:
 	if p.get("hard", false):
 		green = green.darkened(0.3)
 		green_d = green_d.darkened(0.3)
-	var rx := 11.0 * (1.0 + sq)
-	var ry := 9.0 * (1.0 - sq)
-	var c := Vector2(W / 2.0 + float(p.get("fx", 0.0)), GROUND - ry - float(p.get("lift", 0.0)))
+	var front: bool = p.get("front", false)
+	# 정면에선 앞으로 늘어나기(fx)가 옆으로 밀리는 게 아니라 나에게 다가오는 것 — 조금 커진다
+	var grow := 1.0 + float(p.get("fx", 0.0)) * 0.04 if front else 1.0
+	var rx := 11.0 * (1.0 + sq) * grow
+	var ry := 9.0 * (1.0 - sq) * grow
+	var c := Vector2(W / 2.0 + (0.0 if front else float(p.get("fx", 0.0))), GROUND - ry - float(p.get("lift", 0.0)))
 	for y in range(floori(c.y - ry), ceili(c.y + ry) + 1):
 		for x in range(floori(c.x - rx), ceili(c.x + rx) + 1):
 			var d := Vector2((x + 0.5 - c.x) / rx, (y + 0.5 - c.y) / ry)
 			if d.length_squared() <= 1.0 and y <= GROUND:
 				_px(img, x, y, green_d if d.y > 0.4 else green)
 	_disc(img, c + Vector2(-rx * 0.45, -ry * 0.45), 1.6, Color(0.85, 0.92, 1.0) if king else Color(0.8, 1.0, 0.75))
-	_eyes(img, c + Vector2(rx * 0.15, -ry * 0.25), p.eyes)
+	if front:
+		_eyes_front(img, c + Vector2(0, -ry * 0.25), p.eyes, 4)
+	else:
+		_eyes(img, c + Vector2(rx * 0.15, -ry * 0.25), p.eyes)
 	if king:
 		var top := c.y - ry
 		var gold := Color(0.98, 0.8, 0.2)
@@ -412,45 +446,64 @@ static func _draw_mushroom(img: Image, p: Dictionary) -> void:
 	if p.get("hard", false):
 		cap = cap.darkened(0.3)
 		cap_d = cap_d.darkened(0.3)
+	var front: bool = p.get("front", false)
 	var foot := GROUND - lift
 	var sh := 12.0 * (1.0 - sq)  # 기둥 높이
-	var cx := W / 2.0 + fx * 0.5
+	var cx := W / 2.0 + (0.0 if front else fx * 0.5)
 	_limb(img, Vector2(cx - 3, foot - 1), Vector2(cx - 5, foot), 2.0, stem_d)
 	_limb(img, Vector2(cx + 3, foot - 1), Vector2(cx + 5, foot), 2.0, stem_d)
 	_poly(img, [Vector2(cx - 5, foot - 1), Vector2(cx + 5, foot - 1), Vector2(cx + 4, foot - sh), Vector2(cx - 4, foot - sh)], stem)
-	_poly(img, [Vector2(cx - 5, foot - 1), Vector2(cx - 2, foot - 1), Vector2(cx - 2, foot - sh), Vector2(cx - 4, foot - sh)], stem_d)
-	_eyes(img, Vector2(cx - 0.5, foot - sh * 0.62), p.eyes)
-	# 갓: 반타원. 공격(fx)할 땐 앞으로 기울어 들이받는 느낌
-	var crx := 13.0 * (1.0 + sq * 0.6)
-	var cry := 9.0 * (1.0 - sq * 0.5)
-	var cc := Vector2(cx + fx, foot - sh + 1)
+	if front:
+		# 정면: 기둥 양쪽 가장자리만 어둡게(대칭), 눈은 가운데
+		_limb(img, Vector2(cx - 4.5, foot - 1), Vector2(cx - 3.8, foot - sh), 1.2, stem_d)
+		_limb(img, Vector2(cx + 4.5, foot - 1), Vector2(cx + 3.8, foot - sh), 1.2, stem_d)
+		_eyes_front(img, Vector2(cx, foot - sh * 0.62), p.eyes, 3)
+	else:
+		_poly(img, [Vector2(cx - 5, foot - 1), Vector2(cx - 2, foot - 1), Vector2(cx - 2, foot - sh), Vector2(cx - 4, foot - sh)], stem_d)
+		_eyes(img, Vector2(cx - 0.5, foot - sh * 0.62), p.eyes)
+	# 갓: 반타원. 공격(fx)할 땐 앞으로 기울어 들이받는 느낌(정면에선 갓이 커지며 다가온다)
+	var grow := 1.0 + fx * 0.04 if front else 1.0
+	var crx := 13.0 * (1.0 + sq * 0.6) * grow
+	var cry := 9.0 * (1.0 - sq * 0.5) * grow
+	var cc := Vector2(cx + (0.0 if front else fx), foot - sh + 1)
 	for y in range(floori(cc.y - cry), ceili(cc.y) + 1):
 		for x in range(floori(cc.x - crx), ceili(cc.x + crx) + 1):
 			var d := Vector2((x + 0.5 - cc.x) / crx, (y + 0.5 - cc.y) / cry)
 			if d.length_squared() <= 1.0:
 				_px(img, x, y, cap_d if d.y > -0.25 else cap)
-	for off: Vector2 in [Vector2(-6, -4), Vector2(1, -6.5), Vector2(6, -3), Vector2(-1, -2)]:
+	var dots := [Vector2(-7, -3), Vector2(-3, -6.5), Vector2(3, -6.5), Vector2(7, -3), Vector2(0, -2.5)] if front \
+		else [Vector2(-6, -4), Vector2(1, -6.5), Vector2(6, -3), Vector2(-1, -2)]
+	for off: Vector2 in dots:
 		_disc(img, cc + off, 1.3, WHITE)
 
 
 static func _draw_bat(img: Image, p: Dictionary) -> void:
 	var body := Color(0.4, 0.31, 0.48)
 	var body_d := Color(0.26, 0.19, 0.32)
-	var c := Vector2(W / 2.0 + float(p.get("fx", 0.0)), 24.0 + float(p.bob))
+	var front: bool = p.get("front", false)
+	var c := Vector2(W / 2.0 + (0.0 if front else float(p.get("fx", 0.0))), 24.0 + float(p.bob))
 	var lift := sin(deg_to_rad(float(p.get("wing", 0.0))))
-	# 뒤 날개를 먼저, 어둡게
+	# 옆모습은 뒤 날개를 먼저 어둡게. 정면은 두 날개가 대칭으로 펼쳐져 같은 색이고 조금 더 넓다
+	var span := 16.0 if front else 14.0
 	for side: int in [-1, 1]:
 		var root := c + Vector2(side * 3, -1)
-		var tip := root + Vector2(side * 14, -lift * 10.0)
-		var col := body_d if side < 0 else Color(0.33, 0.24, 0.4)
+		var tip := root + Vector2(side * span, -lift * 10.0)
+		var col := Color(0.33, 0.24, 0.4) if front or side > 0 else body_d
 		_poly(img, [root, tip, root + Vector2(side * 10, 6 - lift * 3.0), root + Vector2(side * 4, 5)], col)
+		if front:  # 날개 뼈대
+			_limb(img, root, tip, 0.8, body_d)
 	_disc(img, c, 5.5, body)
 	_disc(img, c + Vector2(0, 2.5), 3.5, body_d)
 	_poly(img, [c + Vector2(-4, -3), c + Vector2(-3, -9), c + Vector2(-1, -4)], body)
 	_poly(img, [c + Vector2(1, -4), c + Vector2(3, -9), c + Vector2(4, -3)], body)
-	_eyes(img, c + Vector2(-1.5, -2), p.eyes, Color(0.95, 0.85, 0.2))
-	_px(img, int(c.x) + 2, int(c.y) + 3, WHITE)
-	_px(img, int(c.x) + 4, int(c.y) + 3, WHITE)
+	if front:
+		_eyes_front(img, c + Vector2(0, -2), p.eyes, 3, Color(0.95, 0.85, 0.2))
+		_px(img, int(c.x) - 2, int(c.y) + 3, WHITE)
+		_px(img, int(c.x) + 1, int(c.y) + 3, WHITE)
+	else:
+		_eyes(img, c + Vector2(-1.5, -2), p.eyes, Color(0.95, 0.85, 0.2))
+		_px(img, int(c.x) + 2, int(c.y) + 3, WHITE)
+		_px(img, int(c.x) + 4, int(c.y) + 3, WHITE)
 
 
 # ---------------------------------------------------------------- 그리기 도구

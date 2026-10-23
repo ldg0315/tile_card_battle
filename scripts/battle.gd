@@ -15,6 +15,10 @@ const PixelArt := preload("res://scripts/pixel_art.gd")
 const SlashShader := preload("res://shaders/slash_ring.gdshader")
 const Minimap := preload("res://scripts/minimap.gd")
 const RangeIcon := preload("res://scripts/range_icon.gd")
+const VoxelArt := preload("res://scripts/voxel_art.gd")
+# 복셀 입체 모델로 보여줄 캐릭터. 정면·옆 그림으로 깎아 만든다(voxel_art.gd).
+# 슬라임으로 시험했지만 가까이서 정육면체 계단이 도드라져 보류 — 비워 두면 모두 빌보드. 다시 보려면 "slime" 을 넣는다
+const VOXEL_CHARS: Array[String] = []
 
 const TILE := 2.0
 const SPRITE_PX := 0.09  # 발사체 도트 크기
@@ -104,6 +108,11 @@ var cam: Camera3D
 var tp_xform: Transform3D  # 3인칭 카메라 자리
 var cam_smooth: Transform3D  # 흔들림을 빼고 부드럽게 따라가는 카메라 상태
 var shake_off := Vector3.ZERO
+var voxels := {}  # 전투원 번호 → {"meshes": {동작: [메시]}, "node": MeshInstance3D, "mat": 재질}
+var voxel_on := true  # 기술 체험에서 X 로 끄고 켜 빌보드와 비교
+var _voxel_cache := {}  # "캐릭터:pixel_size" → 메시 묶음(같은 몬스터를 다시 만들 때 재사용)
+var view_frames := {}  # 전투원 번호 → [옆모습, 정면(없으면 null)] 프레임
+var showing_front := {}  # 전투원 번호 → 지금 정면 그림을 보여주는 중인지
 var cam_fov := TP_FOV  # 반동을 뺀 시야각(시점 전환 때 부드럽게 바뀐다)
 var fov_kick := 0.0  # 1인칭 기술 반동으로 잠깐 좁아지는 시야
 var fp_spin := 0.0  # 1인칭 회전베기 중 카메라가 더 돌아간 각도(라디안)
@@ -883,12 +892,15 @@ func _new_game() -> void:
 		var frames := CharArt.build_frames(f.char_id)
 		var s := sprites[i]
 		s.sprite_frames = frames
+		view_frames[i] = [frames, CharArt.front_of(frames)]
+		showing_front[i] = false
 		# 도트는 각지게, 큰 그림(캡처·일러스트 풍)은 부드럽게 + 밉맵(작게 그려질 때 지글거림 방지)
 		s.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS if CharArt.is_smooth(frames) \
 			else BaseMaterial3D.TEXTURE_FILTER_NEAREST
 		var height: float = CHAR_HEIGHT * Cards.CHARACTERS[f.char_id].get("scale", 1.0)
 		sprite_half[i] = height / 2.0
 		s.pixel_size = height / frames.get_frame_texture("idle", 0).get_height()
+		_attach_voxel(i, f.char_id, frames)  # pixel_size 를 정한 뒤에 — 복셀 한 칸 크기가 도트 한 칸과 같아야 겹친다
 		s.get_child(0).position.y = -sprite_half[i] + 0.02  # 발밑 그림자
 		s.get_child(0).show()
 		card_tags[i].position.y = sprite_half[i] + 0.45
@@ -1342,6 +1354,10 @@ func _input(event: InputEvent) -> void:
 		if Rules.in_board(t):
 			_move_practice_target(t)
 		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_X and practice:
+		voxel_on = not voxel_on  # 복셀 입체 ↔ 빌보드 그림 비교(시험 중인 기능)
+		_apply_voxel_visibility()
+		get_viewport().set_input_as_handled()
 	elif event.keycode == KEY_T and practice and not busy:
 		var ids := Game.practice_targets()
 		var k := (ids.find(Game.practice_target) + 1) % ids.size()
@@ -1500,6 +1516,8 @@ func _process(delta: float) -> void:
 	# 반동이 프레임마다 누적돼, 저격처럼 크게 당기면 시야각이 1도 아래로 떨어져 엔진 오류가 났다
 	cam_fov = lerpf(cam_fov, FP_FOV if fp else TP_FOV, k)
 	cam.fov = clampf(cam_fov + fov_kick, 10.0, 120.0)
+	_update_view_frames()
+	_update_voxels()
 	_apply_backdrop(fp)
 	if fp:
 		_update_fp_hud()
@@ -1511,6 +1529,93 @@ func _process(delta: float) -> void:
 	minimap.visible = first_person or minimap_always
 	if minimap.visible:
 		minimap.queue_redraw()
+
+
+## 정면 그림이 있는 캐릭터는 카메라가 그 캐릭터의 앞쪽에 있으면 정면, 아니면 옆모습을 보여준다(둠처럼 보는 각도별 그림).
+## 1인칭에서 마주 본 몬스터가 옆모습이면 눈이 한쪽에 몰린 판자처럼 보였다. 3인칭은 카메라가 옆에서 내려다봐 늘 옆모습.
+## 경계에서 깜빡이지 않게 켜는 각도(약 52도 안)와 끄는 각도(약 60도 밖)를 다르게 둔다.
+func _update_view_frames() -> void:
+	var cam_pos := cam.global_position
+	for i: int in view_frames:
+		var pair: Array = view_frames[i]
+		if pair[1] == null or i >= rules.fighters.size() or gone[i]:
+			continue
+		var to_cam := cam_pos - sprites[i].global_position
+		to_cam.y = 0.0
+		if to_cam.length() < 0.05:
+			continue
+		var d := to_cam.normalized().dot(Vector3(step_facing[i], 0, 0))
+		var now: bool = showing_front.get(i, false)
+		var want := d > (0.5 if now else 0.62)
+		if want != now:
+			showing_front[i] = want
+			_swap_frames(sprites[i], pair[1] if want else pair[0])
+
+
+## 복셀 모델을 스프라이트의 자식으로 붙인다. 스프라이트는 그대로 두고(위치·동작·프레임·색을 기존 연출 코드가 다 움직인다)
+## 그림만 숨긴 채, 매 프레임 같은 동작·프레임의 메시를 보여준다 — 연출 코드를 하나도 고치지 않고 입체로 바꾸려고.
+func _attach_voxel(i: int, char_id: String, frames: SpriteFrames) -> void:
+	var s := sprites[i]
+	var old := s.get_node_or_null("Voxel")
+	if old != null:
+		old.queue_free()
+		s.remove_child(old)
+	voxels.erase(i)
+	s.layers = 1
+	if not char_id in VOXEL_CHARS:
+		return
+	var key := "%s:%f" % [char_id, s.pixel_size]
+	if not _voxel_cache.has(key):
+		var front := CharArt.front_of(frames)
+		_voxel_cache[key] = VoxelArt.build(frames, front if front != null else frames, s.pixel_size)
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true  # 도트 색은 sRGB — 빼면 색이 허옇게 바랬다
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var node := MeshInstance3D.new()
+	node.name = "Voxel"
+	node.material_override = mat
+	s.add_child(node)
+	voxels[i] = {"meshes": _voxel_cache[key], "node": node, "mat": mat}
+	_apply_voxel_visibility()
+
+
+func _apply_voxel_visibility() -> void:
+	for i: int in voxels:
+		# 빌보드 그림만 숨긴다: 어떤 카메라에도 안 잡히는 렌더 층으로(자식인 복셀·그림자는 각자 층이라 그대로 보인다).
+		# transparency 로 숨기려 했더니 이 렌더러에선 스프라이트에 먹지 않았다
+		sprites[i].layers = 0 if voxel_on else 1
+		voxels[i].node.visible = voxel_on
+
+
+## 스프라이트가 지금 보여주는 동작·프레임·방향·색을 복셀 모델에 그대로 옮긴다.
+func _update_voxels() -> void:
+	if not voxel_on:
+		return
+	for i: int in voxels:
+		var v: Dictionary = voxels[i]
+		var s := sprites[i]
+		var list: Array = v.meshes.get(s.animation, [])
+		if list.is_empty():
+			continue
+		v.node.mesh = list[mini(s.frame, list.size() - 1)]
+		v.node.rotation.y = PI if s.flip_h else 0.0  # 몸이 +X 를 보게 만든 모델 — 왼쪽을 보면 돌린다
+		var mat: StandardMaterial3D = v.mat
+		mat.albedo_color = s.modulate  # 피격 번쩍임·방어 푸른빛·쓰러질 때 사라지기
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA if s.modulate.a < 0.99 else BaseMaterial3D.TRANSPARENCY_DISABLED
+
+
+## 같은 동작·같은 프레임 위치를 이어서 그림만 바꾼다(정면/옆 프레임 수는 같게 만들어져 있다).
+func _swap_frames(s: AnimatedSprite3D, frames: SpriteFrames) -> void:
+	var anim := s.animation
+	var fr := s.frame
+	var prog := s.frame_progress
+	var playing := s.is_playing()
+	s.sprite_frames = frames
+	s.play(anim)
+	s.set_frame_and_progress(mini(fr, maxi(frames.get_frame_count(anim) - 1, 0)), prog)
+	if not playing:
+		s.pause()
 
 
 ## 배경 그림이 있을 때 시점에 맞춰 바꾼다: 3인칭 = 화면 전체 그림(땅·소품 숨김), 1인칭 = 파노라마 하늘 + 땅·소품.
@@ -2668,6 +2773,7 @@ func _particles(amount: int, life: float, from: Color, to: Color) -> CPUParticle
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true  # 도트 색은 sRGB — 빼면 색이 허옇게 바랬다
 	quad.material = mat
 	p.mesh = quad
 	var g := Gradient.new()
@@ -3270,6 +3376,9 @@ func _handle_debug_args() -> void:
 			auto = true
 		elif a == "--fp":
 			_toggle_view()
+		elif a == "--novoxel":
+			voxel_on = false  # 복셀 대신 빌보드로 찍어 비교
+			_apply_voxel_visibility()
 		elif a.begins_with("--rclick="):
 			# 칸(열,행)을 오른쪽 클릭하는 입력을 흘려 넣는다(기술 체험의 연습 상대 옮기기 확인용)
 			var rv := a.substr(9).split(",")
